@@ -234,7 +234,15 @@ test(`native ${mode} runner pairs and stops a real subprocess without OS registr
   const service = createNativeBridgeService({ platform: 'linux', env, backend });
   const result = await service.start({ waitForPairing: true });
   assert.equal(result.pairingSession.pairingPayload.sessionId, 'test-session');
-  assert.equal(service.status().bridgeStatus.connectionStatus, 'connected');
+  // Pairing and status are separate writes. Windows ACL setup can put them several polls apart.
+  const deadline = Date.now() + 5000;
+  let status;
+  do {
+    status = service.status().bridgeStatus;
+    if (status?.connectionStatus === 'connected') break;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  } while (Date.now() < deadline);
+  assert.equal(status?.connectionStatus, 'connected');
   await service.stop();
   assert.equal(await closed, 0);
   assert.equal(fs.existsSync(path.join(env.REMODEX_DEVICE_STATE_DIR, 'service-lock.json')), false);
