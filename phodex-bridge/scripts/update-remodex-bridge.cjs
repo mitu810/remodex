@@ -139,6 +139,7 @@ async function waitForService(service, state, pause) {
   const deadline = Date.now() + 20_000;
   do {
     const current = service.state();
+    if (state === "active" && current === "failed") break;
     checks = (current === state || (state === "inactive" && current === "failed")) ? checks + 1 : 0;
     if (checks >= (state === "active" ? 3 : 1)) return;
     await pause(1_000);
@@ -193,7 +194,7 @@ async function replaceBridge(service, archive, bridge, {
     }
     run(service.nodePath, ["-e", 'require("./src/bridge"); require("./src/service-entry");'], { cwd: staging });
 
-    const wasRunning = service.state() === "active";
+    const wasRunning = ["active", "activating"].includes(service.state());
     let stopped = false;
     let swapped = false;
     try {

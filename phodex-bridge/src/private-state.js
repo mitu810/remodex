@@ -16,21 +16,23 @@ function protectPrivatePath(filePath, { platform = process.platform, fsImpl = fs
     runPowerShell(`${powershellData({ path: filePath })}
       $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User;
       $item = Get-Item -LiteralPath $data.path -Force;
+      $rights = [Security.AccessControl.FileSystemRights]::FullControl;
+      $allow = [Security.AccessControl.AccessControlType]::Allow;
       if ($item.PSIsContainer) {
-        $acl = New-Object System.Security.AccessControl.DirectorySecurity;
-        $rule = New-Object System.Security.AccessControl.FileSystemAccessRule($sid, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow');
+        $acl = [Security.AccessControl.DirectorySecurity]::new();
+        $flags = [Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [Security.AccessControl.InheritanceFlags]::ObjectInherit;
+        $rule = [Security.AccessControl.FileSystemAccessRule]::new($sid, $rights, $flags, [Security.AccessControl.PropagationFlags]::None, $allow);
       } else {
-        $acl = New-Object System.Security.AccessControl.FileSecurity;
-        $rule = New-Object System.Security.AccessControl.FileSystemAccessRule($sid, 'FullControl', 'Allow');
+        $acl = [Security.AccessControl.FileSecurity]::new();
+        $rule = [Security.AccessControl.FileSystemAccessRule]::new($sid, $rights, $allow);
       }
-      $acl.SetOwner($sid);
       $acl.SetAccessRuleProtection($true, $false);
       $acl.AddAccessRule($rule);
-      Set-Acl -LiteralPath $data.path -AclObject $acl;
+      $item.SetAccessControl($acl);
     `, { execFileSyncImpl });
     protectedWindowsPaths.set(filePath, identity);
-  } catch {
-    throw new Error('Could not set private state permissions for the current Windows user. Check file ownership and NTFS ACL support.');
+  } catch (error) {
+    throw new Error('Could not set private state permissions for the current Windows user. Check file ownership and NTFS ACL support.', { cause: error });
   }
 }
 

@@ -16,12 +16,12 @@ function createBridgePackageVersionStatusReader({
   emptyCacheRetryMs = DEFAULT_EMPTY_CACHE_RETRY_MS,
   initialFetchWaitMs = DEFAULT_INITIAL_FETCH_WAIT_MS,
   fetchLatestPublishedVersionImpl = fetchLatestPublishedVersion,
+  bridgeCanInstallRelease = supportsInstalledBridgeUpdate(),
 } = {}) {
   let cachedLatestVersion = "";
   let lastSuccessfulResolveAt = 0;
   let lastAttemptedAt = 0;
   let inFlightPromise = null;
-  const bridgeCanInstallRelease = supportsInstalledBridgeUpdate();
 
   // Shares one cached lookup across repeated Settings/account refreshes without
   // holding the local account status path hostage on a slow release lookup.

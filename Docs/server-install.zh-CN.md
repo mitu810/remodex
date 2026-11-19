@@ -110,7 +110,7 @@ node setup-server.cjs bridge 'wss://mac.example.com/relay'
 
 从 [本仓库 GitHub Releases](https://github.com/mitu810/remodex/releases/latest) 下载 `remodex-bridge-update.zip` 和 `update-remodex-bridge.cjs`。把两个文件放在同一个目录中，无需解压 ZIP。用原来运行 bridge 的账号进入该目录，然后执行 `node update-remodex-bridge.cjs`。Windows、Linux 和 macOS 使用同一组文件。脚本会备份旧 bridge，沿用已有服务配置并重启 bridge。已重新连接的 iPhone 可以继续使用已保存的配对。首次接入 GitHub 更新也可使用这个脚本。
 
-已接入 GitHub 更新的 macOS 安装包可以从 iPhone 的 **设置 → Bridge** 发起安装。Windows 和 Linux 可通过同一页面打开 Release，并在运行 bridge 的电脑执行更新脚本。
+Windows、Linux 和 macOS 的服务端安装包支持从 iPhone 的 **设置 → 桥接** 发起更新。Windows 和 Linux 若仍在使用 4.0.1 或更早的版本，先在电脑上运行一次本页的更新脚本，将 bridge 升级到 4.0.2 或更新版本。后续更新可从 iPhone 发起。更新时连接会短暂中断，原有 Windows 计划任务、Linux systemd 用户服务和开机自启配置会保留。
 
 Windows 和 Linux 使用同一个服务端 ZIP。已配对的电脑可以沿用原安装目录和 relay 地址。
 

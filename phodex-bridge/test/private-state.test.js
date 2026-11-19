@@ -19,7 +19,28 @@ test('private writes restrict existing Windows files before replacing sensitive 
   assert.equal(fs.readFileSync(file, 'utf8'), 'private');
   assert.match(script, /SetAccessRuleProtection\(\$true, \$false\)/);
   assert.match(script, /WindowsIdentity/);
-  assert.match(script, /Set-Acl/);
+  assert.match(script, /SetAccessControl/);
+});
+
+test('Windows state paths are restricted to the running user by their actual NTFS ACL', { skip: process.platform !== 'win32' }, (t) => {
+  const { ensurePrivateDirectory, writePrivateFile } = require('../src/private-state');
+  const { powershellData, runPowerShell } = require('../src/powershell');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'remodex ACL 中文 '));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const file = path.join(root, 'state.json');
+  ensurePrivateDirectory(root);
+  writePrivateFile(file, 'private fixture');
+  runPowerShell(`${powershellData({ root, file })}
+    $user = [Security.Principal.WindowsIdentity]::GetCurrent().User;
+    foreach ($name in @($data.root, $data.file)) {
+      $item = Get-Item -LiteralPath $name -Force;
+      $acl = $item.GetAccessControl([Security.AccessControl.AccessControlSections]::Access);
+      $rules = $acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]);
+      if (!$acl.AreAccessRulesProtected -or $rules.Count -ne 1 -or $rules[0].IdentityReference -ne $user -or $rules[0].IsInherited) {
+        throw 'The path does not have an owner-user-only protected DACL.';
+      }
+    }
+  `);
 });
 
 test('replacing a private file invalidates the cached Windows ACL check', (t) => {

@@ -61,7 +61,10 @@ async function acquireServiceLock({ env = process.env, processImpl = process, fs
   };
 }
 
-function runBridgeService({ env = process.env, processImpl = process, startBridgeImpl, useLock = true, missingConfigMessage = 'No relay URL configured for the bridge service.' } = {}) {
+function runBridgeService({
+  env = process.env, processImpl = process, startBridgeImpl, useLock = true,
+  scheduleBridgeUpdate, onStatus, missingConfigMessage = 'No relay URL configured for the bridge service.',
+} = {}) {
   const config = readDaemonConfig({ env });
   if (!config?.relayUrl) {
     clearPairingSession({ env });
@@ -89,13 +92,21 @@ function runBridgeService({ env = process.env, processImpl = process, startBridg
     };
     processImpl.once('exit', dispose);
     try {
-      (startBridgeImpl || require('./bridge').startBridge)({
-        config, printPairingQr: false,
+      const bridge = (startBridgeImpl || require('./bridge').startBridge)({
+        config, printPairingQr: false, scheduleBridgeUpdate,
         onPairingSession(pairing) { writePairingSession(pairing, { env }); },
-        onBridgeStatus(status) { writeBridgeStatus(mergeBridgeStatusForDaemon(status, readBridgeStatus({ env })), { env }); },
+        onBridgeStatus(status) {
+          writeBridgeStatus(mergeBridgeStatusForDaemon(status, readBridgeStatus({ env })), { env });
+          onStatus?.(status);
+        },
       });
+      return {
+        dispose,
+        async stop() {
+          try { await bridge?.stop(); } finally { await dispose(); }
+        },
+      };
     } catch (error) { dispose(); throw error; }
-    return { dispose };
   }
 }
 

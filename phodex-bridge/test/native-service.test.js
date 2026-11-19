@@ -68,7 +68,7 @@ test('Windows task launcher executes literal percent and Unicode paths', { skip:
   const directory = path.join(root, '%PATH% & 服务');
   fs.mkdirSync(directory);
   const nodePath = path.join(directory, 'node.exe');
-  try { fs.linkSync(process.execPath, nodePath); } catch { fs.copyFileSync(process.execPath, nodePath); }
+  fs.copyFileSync(process.execPath, nodePath);
   const entryPath = path.join(directory, 'entry.js');
   const stateDir = path.join(directory, '%USERNAME%');
   fs.writeFileSync(entryPath, 'process.stdout.write(JSON.stringify(process.argv.slice(2)));');
@@ -248,6 +248,96 @@ test('service entry exits cleanly after its saved configuration is removed', (t)
   const { root } = fixture(t);
   execFileSync(process.execPath, [path.resolve(__dirname, '../src/service-entry.js'), root], { timeout: 5000 });
 });
+
+for (const failStartup of [false, true]) {
+  test(`an App update ${failStartup ? 'rolls back a failed' : 'replaces a healthy'} native bridge worker`, { timeout: 15_000 }, async (t) => {
+    const { fork } = require('node:child_process');
+    const { EventEmitter } = require('node:events');
+    const { runNativeServiceSupervisor } = require('../src/native-service-supervisor');
+    const { updateBridge } = require('../scripts/update-remodex-bridge.cjs');
+    const { root } = fixture(t);
+    const bridge = path.join(root, 'phodex-bridge');
+    const entry = path.join(bridge, 'src', 'service-entry.js');
+    const ack = path.join(root, 'update-ack.json');
+    const archive = path.join(root, 'verified.zip');
+    fs.writeFileSync(path.join(root, 'setup-server.cjs'), '');
+    fs.writeFileSync(archive, 'fixture archive');
+
+    function writeBridge(directory, version, broken = false) {
+      const src = path.join(directory, 'src');
+      fs.mkdirSync(src, { recursive: true });
+      fs.writeFileSync(path.join(directory, 'package.json'), JSON.stringify({ version }));
+      fs.writeFileSync(path.join(directory, 'package-lock.json'), '{}');
+      fs.writeFileSync(path.join(src, 'bridge.js'), '');
+      fs.writeFileSync(path.join(src, 'service-entry.js'), `
+        if (require.main === module) {
+          if (${broken}) process.exit(23);
+          const fs = require('node:fs');
+          process.on('message', (message) => {
+            if (message.kind === 'stop') process.exit(0);
+            if (message.kind === 'updateResult') fs.writeFileSync(${JSON.stringify(ack)}, JSON.stringify(message));
+          });
+          process.send({ kind: 'status', ready: true, version: ${JSON.stringify(version)} });
+        }
+      `);
+    }
+
+    writeBridge(bridge, '4.0.2');
+    fs.mkdirSync(path.join(bridge, 'node_modules'));
+    const workers = [];
+    const owner = new EventEmitter();
+    const proc = { execPath: process.execPath, env: process.env, on: owner.on.bind(owner), off: owner.off.bind(owner) };
+    const wait = async (condition) => {
+      const deadline = Date.now() + 5000;
+      while (!condition()) {
+        assert.ok(Date.now() < deadline, 'timed out waiting for a worker state');
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+    };
+
+    let disposed = false;
+    const messages = [];
+    const done = runNativeServiceSupervisor({
+      stateDir: root, entryPath: entry, processImpl: proc,
+      log: (message) => messages.push(message),
+      forkWorker(file, args, options) {
+        const child = fork(file, args, options);
+        workers.push(child);
+        child.on('message', (message) => { if (message.kind === 'status') child.version = message.version; });
+        return child;
+      },
+      stageUpdate: async () => ({ version: '4.0.3', archive, cleanUp() { disposed = true; } }),
+      async applyUpdate(service, file, options) {
+        await wait(() => fs.existsSync(ack));
+        assert.deepEqual(JSON.parse(fs.readFileSync(ack)), { kind: 'updateResult', version: '4.0.3' });
+        return updateBridge(service, file, {
+          ...options,
+          pause: () => new Promise((resolve) => setTimeout(resolve, 20)),
+          run(command, args, commandOptions) {
+            if (command === process.execPath) return execFileSync(command, args, commandOptions);
+            const workspace = fs.readdirSync(root).find((name) => name.startsWith('.remodex-bridge-update-'));
+            writeBridge(path.join(root, workspace, 'release', 'phodex-bridge'), '4.0.3', failStartup);
+          },
+        });
+      },
+    });
+    t.after(() => { for (const worker of workers) if (worker.exitCode === null) worker.kill(); });
+    await wait(() => workers[0]?.version === '4.0.2');
+    workers[0].emit('message', { kind: 'update' });
+    await wait(() => disposed);
+    assert.equal(workers[0].exitCode, 0);
+    const expectedVersion = failStartup ? '4.0.2' : '4.0.3';
+    try {
+      assert.equal(workers.length, failStartup ? 3 : 2, messages.join('\n'));
+      assert.equal(workers.at(-1).version, expectedVersion);
+      assert.equal(JSON.parse(fs.readFileSync(path.join(bridge, 'package.json'))).version, expectedVersion);
+      assert.equal(owner.listenerCount('SIGTERM'), 1);
+    } finally {
+      owner.emit('SIGTERM');
+      await done;
+    }
+  });
+}
 
 test('fresh-shell start preserves installed runtime, endpoint and identity settings', async (t) => {
   const { createNativeBridgeService } = require('../src/native-bridge-service');

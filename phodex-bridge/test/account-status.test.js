@@ -14,6 +14,21 @@ const {
   redactAuthStatus,
 } = require("../src/account-status");
 
+test("a supervised Windows or Linux bridge advertises the same App update capability as macOS", () => {
+  for (const hostPlatform of ["linux", "win32"]) {
+    const status = composeAccountStatus({
+      hostPlatform,
+      bridgeVersionInfo: {
+        bridgeReleaseRepository: "mitu810/remodex",
+        bridgeCanInstallRelease: true,
+      },
+    });
+    assert.equal(status.bridgeCanInstallRelease, true);
+    assert.equal(status.hostCapabilities.bridgeUpdate, true);
+    assert.equal(composeAccountStatus({ hostPlatform }).hostCapabilities.bridgeUpdate, false);
+  }
+});
+
 const macHostMetadata = {
   codexTransportMode: null,
   hostPlatform: "macos",

@@ -775,6 +775,7 @@ function startBridgeSession({
   printPairingQr = true,
   onPairingSession = null,
   onBridgeStatus = null,
+  scheduleBridgeUpdate,
 }, { relaySessionId, scheduleRestart, requestExit, desktopRestartFailed = false }) {
   const config = explicitConfig || readBridgeConfig();
   const catalogDeletionScope = config.codexEndpoint ? null : randomBytes(16).toString("hex");
@@ -843,7 +844,9 @@ function startBridgeSession({
     completionStatePath: config.pushCompletionStatePath,
     readThread: (threadId) => sendCodexRequest("thread/read", buildCompleteThreadReadParams(threadId)),
   });
-  const readBridgePackageVersionStatus = createBridgePackageVersionStatusReader();
+  const readBridgePackageVersionStatus = createBridgePackageVersionStatusReader({
+    bridgeCanInstallRelease: scheduleBridgeUpdate ? true : undefined,
+  });
 
   // Keep the local Codex runtime alive across transient relay disconnects.
   let socket = null;
@@ -2778,7 +2781,9 @@ function startBridgeSession({
     }
     bridgeUpdatePending = true;
     try {
-      const version = await scheduleInstalledBridgeUpdate({ logsDir: resolveBridgeLogsDir() });
+      const version = scheduleBridgeUpdate
+        ? await scheduleBridgeUpdate()
+        : await scheduleInstalledBridgeUpdate({ logsDir: resolveBridgeLogsDir() });
       // Keep an installation in flight while its independent worker takes over.
       const reset = setTimeout(() => { bridgeUpdatePending = false; }, 5 * 60_000);
       reset.unref();

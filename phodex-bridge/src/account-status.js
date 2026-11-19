@@ -54,7 +54,7 @@ function composeAccountStatus({
     } : {}),
     codexTransportMode: normalizeString(transportMode) || null,
     hostPlatform: normalizeHostPlatform(hostPlatform),
-    hostCapabilities: deriveHostCapabilities(hostPlatform),
+    hostCapabilities: deriveHostCapabilities(hostPlatform, bridgeVersionInfo?.bridgeCanInstallRelease === true),
   };
 }
 
@@ -172,14 +172,14 @@ function normalizeHostPlatform(platform) {
   }
 }
 
-function deriveHostCapabilities(platform) {
+function deriveHostCapabilities(platform, canInstallRelease) {
   const isMacOS = platform === "darwin";
   return {
     desktopHandoff: isMacOS,
     displayWake: isMacOS,
     keepAwake: isMacOS,
     hostBrowserLogin: isMacOS,
-    bridgeUpdate: isMacOS,
+    bridgeUpdate: isMacOS || canInstallRelease,
   };
 }
 

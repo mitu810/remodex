@@ -14,6 +14,14 @@ const maxArchiveSize = 8 * 1024 * 1024;
 const updaterName = "update-remodex-bridge.cjs";
 const updaterPath = path.join(__dirname, "..", "scripts", updaterName);
 const execFileAsync = promisify(execFile);
+const bridgeRoot = path.join(__dirname, "..");
+
+function supportsBridgeReleaseArchive() {
+  const installRoot = path.dirname(bridgeRoot);
+  return fs.existsSync(updaterPath)
+    && fs.existsSync(path.join(installRoot, "setup-server.cjs"))
+    && !fs.existsSync(path.join(installRoot, ".git"));
+}
 
 function parseBridgeRelease(release) {
   const tag = release?.tag_name;
@@ -45,8 +53,7 @@ async function fetchLatestBridgeRelease() {
 }
 
 function supportsInstalledBridgeUpdate() {
-  if (process.platform !== "darwin" || !fs.existsSync(updaterPath)
-      || !fs.existsSync(path.join(__dirname, "..", "..", "setup-server.cjs"))) {
+  if (process.platform !== "darwin" || !supportsBridgeReleaseArchive()) {
     return false;
   }
   try {
@@ -84,21 +91,40 @@ async function downloadBridgeArchive(release) {
   return Buffer.concat(chunks);
 }
 
-async function scheduleInstalledBridgeUpdate({ logsDir }) {
-  if (!supportsInstalledBridgeUpdate()) {
+async function stageBridgeRelease() {
+  if (!supportsBridgeReleaseArchive()) {
     throw new Error("Use the bridge update package from GitHub Releases on this computer.");
   }
   const release = await fetchLatestBridgeRelease();
-  if (release.version.localeCompare(version, "en", { numeric: true }) < 0) {
+  // A native supervisor can outlive a bridge update. Read the installed version
+  // from disk so subsequent updates cannot downgrade a newer worker.
+  const installed = JSON.parse(fs.readFileSync(path.join(bridgeRoot, "package.json"), "utf8")).version || version;
+  if (release.version.localeCompare(installed, "en", { numeric: true }) < 0) {
     throw new Error("The published bridge is older than the installed version.");
   }
   const archive = await downloadBridgeArchive(release);
   const stage = fs.mkdtempSync(path.join(os.tmpdir(), "remodex-bridge-release-"));
-  const label = `com.remodex.bridge-release-update.${path.basename(stage)}`;
+  const archivePath = path.join(stage, archiveName);
+  const cleanUp = () => fs.rmSync(stage, { recursive: true, force: true });
   try {
-    const worker = path.join(stage, updaterName);
+    require("./private-state").protectPrivatePath(stage);
+    fs.writeFileSync(archivePath, archive, { mode: 0o600, flag: "wx" });
+    return { stage, archive: archivePath, version: release.version, cleanUp };
+  } catch (error) {
+    cleanUp();
+    throw error;
+  }
+}
+
+async function scheduleInstalledBridgeUpdate({ logsDir }) {
+  if (!supportsInstalledBridgeUpdate()) {
+    throw new Error("Use the bridge update package from GitHub Releases on this computer.");
+  }
+  const release = await stageBridgeRelease();
+  const label = `com.remodex.bridge-release-update.${path.basename(release.stage)}`;
+  try {
+    const worker = path.join(release.stage, updaterName);
     fs.copyFileSync(updaterPath, worker, fs.constants.COPYFILE_EXCL);
-    fs.writeFileSync(path.join(stage, archiveName), archive, { mode: 0o600, flag: "wx" });
     fs.mkdirSync(logsDir, { recursive: true, mode: 0o700 });
     const log = path.join(logsDir, "bridge-update.log");
     fs.closeSync(fs.openSync(log, "a", 0o600));
@@ -109,7 +135,7 @@ async function scheduleInstalledBridgeUpdate({ logsDir }) {
     ], { timeout: 10_000 });
     return release.version;
   } catch (error) {
-    fs.rmSync(stage, { recursive: true, force: true });
+    release.cleanUp();
     throw error;
   }
 }
@@ -118,5 +144,7 @@ module.exports = {
   fetchLatestBridgeRelease,
   parseBridgeRelease,
   scheduleInstalledBridgeUpdate,
+  stageBridgeRelease,
+  supportsBridgeReleaseArchive,
   supportsInstalledBridgeUpdate,
 };
