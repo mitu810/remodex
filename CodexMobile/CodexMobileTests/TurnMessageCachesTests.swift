@@ -490,12 +490,12 @@ final class TurnMessageCachesTests: XCTestCase {
 
         XCTAssertEqual(renderModel.assistantImageReferences.first?.path, "/Users/example/wing.png")
         XCTAssertEqual(renderModel.assistantTextWithoutImageSyntax, "Before\nAfter")
-        XCTAssertTrue(renderModel.assistantInlineContentSegments.isEmpty)
+        XCTAssertEqual(renderModel.assistantInlineContentSegments.count, 3)
     }
 
     func testAssistantMarkdownSegmentsKeepTemporaryImagePosition() {
         let text = "Before\n![mobile](/tmp/emanuele-mobile.png)\nAfter"
-        let segments = AssistantMarkdownImageReferenceParser.contentSegmentsPreservingTemporaryImages(from: text)
+        let segments = AssistantMarkdownImageReferenceParser.contentSegmentsPreservingImagePositions(from: text)
 
         XCTAssertEqual(segments.count, 3)
         XCTAssertEqual(segments[0], .text(id: 0, value: "Before\n"))
@@ -507,15 +507,23 @@ final class TurnMessageCachesTests: XCTestCase {
         XCTAssertEqual(segments[2], .text(id: 1, value: "\nAfter"))
     }
 
-    func testAssistantMarkdownSegmentsLeaveGeneratedImageForTrailingPreview() {
+    func testAssistantMarkdownSegmentsKeepGeneratedImagePosition() {
         let text = """
         Before
         ![Generated image](/Users/example/.codex/generated_images/thread/wing.png)
         After
         """
-        let segments = AssistantMarkdownImageReferenceParser.contentSegmentsPreservingTemporaryImages(from: text)
+        let segments = AssistantMarkdownImageReferenceParser.contentSegmentsPreservingImagePositions(from: text)
 
-        XCTAssertEqual(segments, [.text(id: 0, value: "Before\n\nAfter")])
+        XCTAssertEqual(segments, [
+            .text(id: 0, value: "Before\n"),
+            .image(AssistantMarkdownImageReference(
+                path: "/Users/example/.codex/generated_images/thread/wing.png",
+                altText: "Generated image",
+                occurrenceIndex: 0
+            )),
+            .text(id: 1, value: "\nAfter"),
+        ])
     }
 
     func testMessageRowRenderModelStripsImagesBeforeMermaidParsing() {

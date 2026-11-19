@@ -2612,7 +2612,9 @@ test("desktop-origin bootstrap represents an image-only response user opener", a
   t.after(() => controller.stopAll());
   controller.observeInbound(JSON.stringify({ method: "thread/resume", params: { threadId: "thread-response-image-opener" } }));
   await wait(40);
-  assert.equal(outbound.find((m) => m.method === "codex/event/user_message")?.params.message, "Image attachment");
+  const message = outbound.find((m) => m.method === "codex/event/user_message")?.params;
+  assert.equal(message?.message, "Image attachment");
+  assert.match(message.content[0].url, /^remodex:\/\/history-image\/[a-f0-9]{64}\//);
 });
 
 test("capped bootstrap attaches mid-turn growth under a synthetic turn without replaying the tail", async (t) => {
@@ -2629,10 +2631,10 @@ test("capped bootstrap attaches mid-turn growth under a synthetic turn without r
   let bytesRead = 0;
   const trackedFs = { ...fs, readSync(...args) { const count = fs.readSync(...args); bytesRead += count; return count; } };
   const outbound = [];
-  const controller = createRolloutLiveMirrorController({ sendApplicationResponse: (m) => outbound.push(JSON.parse(m)), fsModule: trackedFs, pollIntervalMs: 5, idleTimeoutMs: 200 });
+  const controller = createRolloutLiveMirrorController({ sendApplicationResponse: (m) => outbound.push(JSON.parse(m)), fsModule: trackedFs, pollIntervalMs: 5, idleTimeoutMs: 10_000 });
   t.after(() => controller.stopAll());
   controller.observeInbound(JSON.stringify({ method: "thread/resume", params: { threadId } }));
-  await wait(80);
+  await waitForNotification(outbound, (message) => message.method === "turn/activity");
   // The unreachable tail is never replayed, but the attach announces the run
   // as live under a synthetic turn immediately.
   assert.equal(outbound.some((m) => m.params?.message === "OLD ORPHAN"), false);
@@ -2643,13 +2645,13 @@ test("capped bootstrap attaches mid-turn growth under a synthetic turn without r
   assert.equal(controller.getActiveTurnId(threadId), null);
   const afterBootstrap = bytesRead;
   appendRolloutLines(rolloutPath, [agentMessage("mid-turn delta after attach")]);
-  await wait(30);
+  await waitForNotification(outbound, (message) => message.params?.message === "mid-turn delta after attach");
   assert.ok(bytesRead - afterBootstrap < 16 * 1024, "attached mode reads only the appended delta");
   const midTurnDelta = outbound.find((m) => m.params?.message === "mid-turn delta after attach");
   assert.ok(midTurnDelta, "growth after the attach point must mirror live");
   assert.ok(midTurnDelta.params.turnId.startsWith("rollout-turn:"));
   appendRolloutLines(rolloutPath, [userMessage("Recovered opener"), taskStarted("turn-recovered"), agentMessage("Recovered assistant")]);
-  await wait(50);
+  await waitForNotification(outbound, (message) => message.params?.message === "Recovered assistant");
   const methods = outbound.filter((m) => m.method === "codex/event/user_message" || m.method === "codex/event/agent_message");
   assert.deepEqual(methods.map((m) => m.params.message), ["mid-turn delta after attach", "Recovered opener", "Recovered assistant"]);
   assert.equal(methods[2].params.turnId, "turn-recovered");
@@ -2665,10 +2667,10 @@ test("capped bootstrap attaches to an openerless active turn visible inside the 
   const previousCodexHome = process.env.CODEX_HOME; process.env.CODEX_HOME = homeDir;
   t.after(() => { restoreCodexHome(previousCodexHome); fs.rmSync(homeDir, { recursive: true, force: true }); });
   const outbound = [];
-  const controller = createRolloutLiveMirrorController({ sendApplicationResponse: (m) => outbound.push(JSON.parse(m)), pollIntervalMs: 5, idleTimeoutMs: 200 });
+  const controller = createRolloutLiveMirrorController({ sendApplicationResponse: (m) => outbound.push(JSON.parse(m)), pollIntervalMs: 5, idleTimeoutMs: 10_000 });
   t.after(() => controller.stopAll());
   controller.observeInbound(JSON.stringify({ method: "thread/resume", params: { threadId } }));
-  await wait(80);
+  await waitForNotification(outbound, (message) => message.method === "turn/activity");
   // Content before the attach point stays canonical-history territory, but the
   // hydrated run keeps its real turn id for everything that follows.
   assert.equal(outbound.some((m) => m.params?.message === "pre-attach output"), false);
@@ -2677,17 +2679,24 @@ test("capped bootstrap attaches to an openerless active turn visible inside the 
   // A real hydrated turn id is advertised for the turn-state probe annotation.
   assert.equal(controller.getActiveTurnId(threadId), "turn-live");
   appendRolloutLines(rolloutPath, [agentMessage("post-attach output")]);
-  await wait(30);
+  await waitForNotification(outbound, (message) => message.params?.message === "post-attach output");
   const postAttach = outbound.find((m) => m.params?.message === "post-attach output");
   assert.ok(postAttach, "growth after the attach point must mirror live");
   assert.equal(postAttach.params.turnId, "turn-live");
   appendRolloutLines(rolloutPath, [taskComplete("turn-live")]);
-  await wait(30);
+  await waitForNotification(outbound, (message) => message.method === "turn/completed");
   const completed = outbound.find((m) => m.method === "turn/completed");
   assert.equal(completed?.params.turnId, "turn-live");
   // Once the run closes the probe annotation goes quiet again.
   assert.equal(controller.getActiveTurnId(threadId), null);
 });
+
+async function waitForNotification(outbound, predicate) {
+  const deadline = Date.now() + 5_000;
+  while (!outbound.some(predicate) && Date.now() < deadline) {
+    await wait(10);
+  }
+}
 
 function createTemporaryRolloutHome({ threadId, originator, source, lines }) {
   const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "rollout-live-mirror-"));
@@ -2854,7 +2863,13 @@ function responseUserMessage(message, id = "msg-response-user") {
 function responseImageUserMessage() {
   return JSON.stringify({
     timestamp: "2026-03-15T19:47:36.500Z", type: "response_item",
-    payload: { type: "message", id: "msg-response-image", role: "user", content: [{ type: "input_image", image_url: "data:image/png;base64,abc" }] },
+    payload: {
+      type: "message", id: "msg-response-image", role: "user",
+      content: [{
+        type: "input_image",
+        image_url: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aIioAAAAASUVORK5CYII=",
+      }],
+    },
   });
 }
 

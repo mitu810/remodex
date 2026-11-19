@@ -47,11 +47,6 @@ struct WorkspaceFilePreviewRequest: Identifiable, Equatable {
     }
 }
 
-fileprivate enum WorkspaceLinkedFilePreviewKind {
-    case imageFirst
-    case textFirst
-}
-
 enum WorkspaceFileLinkResolver {
     private static let textFileExtensions: Set<String> = [
         "bash", "c", "cc", "cjs", "cpp", "cs", "css", "go", "h", "html", "java",
@@ -71,9 +66,8 @@ enum WorkspaceFileLinkResolver {
         RemoteHostPath.linkDestination(url).flatMap(normalizedPath)
     }
 
-    fileprivate static func preferredPreviewKind(for path: String) -> WorkspaceLinkedFilePreviewKind {
-        let fileExtension = (path as NSString).pathExtension.lowercased()
-        return textFileExtensions.contains(fileExtension) ? .textFirst : .imageFirst
+    static func supportsImagePreview(_ path: String) -> Bool {
+        imageFileExtensions.contains((path as NSString).pathExtension.lowercased())
     }
 
     private static func normalizedPath(_ value: String) -> String? {
@@ -193,21 +187,22 @@ struct AssistantMarkdownImagePreviewButton: View {
     @Environment(CodexService.self) private var codex
     @State private var previewRequest: AssistantWorkspaceImagePreviewRequest?
     @State private var loadedPreview: PreviewImagePayload?
-    @State private var isAutoLoadingPreview = false
     @State private var didAttemptAutoPreviewLoad = false
-
-    private static let cornerRadius: CGFloat = 18
-    private static let maxWidth: CGFloat = 200
 
     var body: some View {
         Button {
             HapticFeedback.shared.triggerImpactFeedback(style: .light)
-            openPreview()
+            previewRequest = AssistantWorkspaceImagePreviewRequest(
+                reference: reference,
+                currentWorkingDirectory: currentWorkingDirectory,
+                initialPayload: loadedPreview
+            )
         } label: {
-            content
+            TimelineImageThumbnail(image: loadedPreview?.image, side: 96)
         }
         .buttonStyle(.plain)
-        .task(id: autoPreviewLoadKey) {
+        .accessibilityLabel(reference.fileName.isEmpty ? reference.displayTitle : reference.fileName)
+        .task(id: "\(reference.id)|\(codex.connectionPhase)") {
             await loadPreviewAfterChatSettlesIfNeeded()
         }
         .fullScreenCover(item: $previewRequest) { request in
@@ -220,106 +215,19 @@ struct AssistantMarkdownImagePreviewButton: View {
         }
     }
 
-    @ViewBuilder
-    private var content: some View {
-        if let loadedPreview {
-            loadedImage(loadedPreview)
-        } else {
-            metadataCard
-        }
-    }
-
-    private func loadedImage(_ payload: PreviewImagePayload) -> some View {
-        Image(uiImage: payload.image)
-            .resizable()
-            .scaledToFit()
-            .frame(maxWidth: Self.maxWidth, alignment: .leading)
-            .clipShape(RoundedRectangle(cornerRadius: Self.cornerRadius, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: Self.cornerRadius, style: .continuous)
-                    .stroke(Color.primary.opacity(0.06), lineWidth: 0.5)
-            )
-            .contentShape(RoundedRectangle(cornerRadius: Self.cornerRadius, style: .continuous))
-    }
-
-    private var metadataCard: some View {
-        HStack(spacing: 12) {
-            ZStack {
-                Circle()
-                    .fill(Color.accentColor.opacity(0.12))
-                if isAutoLoadingPreview {
-                    ProgressView()
-                        .controlSize(.mini)
-                        .tint(Color.accentColor)
-                } else {
-                    RemodexIcon.image(systemName: "photo")
-                        .font(AppFont.system(size: 15, weight: .semibold))
-                        .foregroundStyle(Color.accentColor)
-                }
-            }
-            .frame(width: 32, height: 32)
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(reference.fileName.isEmpty ? "Generated image" : reference.fileName)
-                    .font(AppFont.subheadline(weight: .semibold))
-                    .foregroundStyle(.primary)
-                Text(reference.path)
-                    .font(AppFont.mono(.caption))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-            }
-
-            Spacer(minLength: 0)
-
-            RemodexIcon.image(systemName: "arrow.up.left.and.arrow.down.right")
-                .font(AppFont.system(size: 14, weight: .semibold))
-                .foregroundStyle(.secondary)
-        }
-        .padding(12)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: Self.cornerRadius, style: .continuous)
-                .fill(Color(.secondarySystemBackground))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: Self.cornerRadius, style: .continuous)
-                .stroke(Color.primary.opacity(0.06), lineWidth: 0.5)
-        )
-    }
-
-    private func openPreview() {
-        previewRequest = AssistantWorkspaceImagePreviewRequest(
-            reference: reference,
-            currentWorkingDirectory: currentWorkingDirectory,
-            initialPayload: loadedPreview
-        )
-    }
-
-    private var autoPreviewLoadKey: String {
-        "\(reference.id)|\(codex.connectionPhase)"
-    }
-
-    private var canAutoLoadPreview: Bool {
-        codex.connectionPhase == .connected
-    }
-
     @MainActor
     private func loadPreviewAfterChatSettlesIfNeeded() async {
-        guard canAutoLoadPreview,
-              loadedPreview == nil,
-              !isAutoLoadingPreview,
-              !didAttemptAutoPreviewLoad else {
+        guard codex.connectionPhase == .connected,
+              loadedPreview == nil, !didAttemptAutoPreviewLoad else {
             return
         }
 
         do {
             // Give post-connect UI reconciliation a beat before starting image reads.
             try await Task.sleep(nanoseconds: 300_000_000)
-            guard canAutoLoadPreview, loadedPreview == nil else { return }
+            guard codex.connectionPhase == .connected,
+                  loadedPreview == nil, !didAttemptAutoPreviewLoad else { return }
             didAttemptAutoPreviewLoad = true
-            isAutoLoadingPreview = true
-            defer { isAutoLoadingPreview = false }
             loadedPreview = try await AssistantWorkspaceImagePreviewLoader.load(
                 reference: reference,
                 currentWorkingDirectory: currentWorkingDirectory,
@@ -335,6 +243,7 @@ private enum WorkspaceLinkedFilePreviewPayload {
     case image(PreviewImagePayload)
     case svg(WorkspaceSVGFilePreviewPayload)
     case text(WorkspaceTextFileReadResult)
+    case download(String)
 }
 
 struct WorkspaceLinkedFilePreviewScreen: View {
@@ -362,6 +271,8 @@ struct WorkspaceLinkedFilePreviewScreen: View {
                     WorkspaceTextFileViewerScreen(file: file, onDismiss: onDismiss, onReload: {
                         Task { await loadPreview(force: true) }
                     })
+                case .download(let reason):
+                    WorkspaceFileDownloadScreen(request: request, fileName: fileName, onDismiss: onDismiss, downloadReason: reason)
                 case nil:
                     loadingOrErrorScreen
                 }
@@ -428,7 +339,7 @@ struct WorkspaceLinkedFilePreviewScreen: View {
 
     private var fileName: String {
         let basename = RemoteHostPath.displayName(request.path, relativeTo: request.currentWorkingDirectory)
-        return basename.isEmpty ? "File" : basename
+        return basename.isEmpty ? String(localized: "File") : basename
     }
 
     @MainActor
@@ -445,41 +356,21 @@ struct WorkspaceLinkedFilePreviewScreen: View {
         }
         defer { isLoading = false }
 
-        switch WorkspaceFileLinkResolver.preferredPreviewKind(for: request.path) {
-        case .imageFirst:
-            await loadImageThenText(force: force)
-        case .textFirst:
-            await loadTextThenImage(force: force)
-        }
-    }
-
-    @MainActor
-    private func loadImageThenText(force: Bool) async {
+        let isImage = WorkspaceFileLinkResolver.supportsImagePreview(request.path)
         do {
-            payload = try await loadVisualPayload(force: force)
-            return
-        } catch {
-            let imageError = error
-            do {
-                payload = .text(try await loadTextPayload())
-            } catch {
-                errorMessage = combinedPreviewError(primary: imageError, fallback: error)
-            }
-        }
-    }
-
-    @MainActor
-    private func loadTextThenImage(force: Bool) async {
-        do {
-            payload = .text(try await loadTextPayload())
-            return
-        } catch {
-            let textError = error
-            do {
+            if isImage {
                 payload = try await loadVisualPayload(force: force)
-            } catch {
-                errorMessage = combinedPreviewError(primary: textError, fallback: error)
+            } else {
+                payload = .text(try await loadTextPayload())
             }
+        } catch CodexServiceError.rpcError(let failure) {
+            if !isImage, let reason = WorkspaceFileError.downloadReason(forPreviewFailure: failure) {
+                payload = .download(reason)
+            } else {
+                errorMessage = WorkspaceFileError.displayMessage(for: failure)
+            }
+        } catch {
+            if !Task.isCancelled { errorMessage = error.localizedDescription }
         }
     }
 
@@ -531,19 +422,13 @@ struct WorkspaceLinkedFilePreviewScreen: View {
         )
     }
 
-    private func combinedPreviewError(primary: Error, fallback: Error) -> String {
-        let primaryMessage = primary.localizedDescription
-        let fallbackMessage = fallback.localizedDescription
-        guard !primaryMessage.isEmpty else { return fallbackMessage }
-        guard !fallbackMessage.isEmpty, fallbackMessage != primaryMessage else { return primaryMessage }
-        return "\(primaryMessage)\n\(fallbackMessage)"
-    }
 }
 
 private struct WorkspaceFileDownloadScreen: View {
     let request: WorkspaceFilePreviewRequest
     let fileName: String
     let onDismiss: () -> Void
+    var downloadReason: String? = nil
 
     @Environment(CodexService.self) private var codex
     @State private var downloadID: UUID?
@@ -561,6 +446,12 @@ private struct WorkspaceFileDownloadScreen: View {
                 Text(fileName)
                     .font(AppFont.subheadline(weight: .semibold))
                     .multilineTextAlignment(.center)
+                if let downloadReason {
+                    Text(downloadReason)
+                        .font(AppFont.caption())
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                }
 
                 if downloadID != nil {
                     ProgressView("Downloading file…", value: progress)
@@ -1438,6 +1329,8 @@ struct AssistantWorkspaceImagePreviewScreen: View {
                 codex: codex,
                 force: force
             )
+        } catch CodexServiceError.rpcError(let failure) {
+            errorMessage = WorkspaceFileError.displayMessage(for: failure)
         } catch {
             errorMessage = error.localizedDescription
         }

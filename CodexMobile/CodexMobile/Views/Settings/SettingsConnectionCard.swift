@@ -51,12 +51,12 @@ struct SettingsConnectionCard: View {
             }
 
             if codex.isConnected {
-                SettingsButton("Disconnect", role: .destructive) {
+                SettingsButton(String(localized: "Disconnect"), role: .destructive) {
                     HapticFeedback.shared.triggerImpactFeedback()
                     isShowingDisconnectConfirmation = true
                 }
             } else if codex.hasTrustedMacReconnectCandidate {
-                SettingsButton("Forget Pair", role: .destructive) {
+                SettingsButton(String(localized: "Forget Pair"), role: .destructive) {
                     HapticFeedback.shared.triggerImpactFeedback()
                     codex.forgetTrustedMac()
                 }

@@ -161,6 +161,31 @@ test("workspace/readFileChunk preserves a binary document across bounded reads",
   assert.deepEqual(Buffer.concat(received), source);
 });
 
+test("workspace/readFileChunk downloads a SQL file rejected by the text preview size limit", async (t) => {
+  const cwd = makeGitWorkspace();
+  t.after(() => fs.rmSync(cwd, { recursive: true, force: true }));
+  const fileName = "统计报表.sql";
+  const source = Buffer.from("SELECT '统计报表';\n".repeat(100_000));
+  fs.writeFileSync(path.join(cwd, fileName), source);
+
+  await assert.rejects(() => handleWorkspaceMethod("workspace/readFile", { cwd, path: fileName }),
+    (error) => error.errorCode === "file_too_large");
+  const pieces = [];
+  let offset = 0;
+  let fileVersion;
+  while (offset < source.length) {
+    const chunk = await handleWorkspaceMethod("workspace/readFileChunk", { cwd, path: fileName, offset, fileVersion });
+    fileVersion ??= chunk.fileVersion;
+    assert.equal(chunk.fileName, fileName);
+    assert.equal(chunk.fileVersion, fileVersion);
+    const bytes = Buffer.from(chunk.data, "base64");
+    assert.ok(bytes.length > 0 && bytes.length <= 1024 * 1024);
+    pieces.push(bytes);
+    offset += bytes.length;
+  }
+  assert.deepEqual(Buffer.concat(pieces), source);
+});
+
 test("workspace/readFileChunk rejects a changed file and an out-of-workspace symlink", async (t) => {
   const cwd = makeGitWorkspace();
   const outside = makeGitWorkspace();

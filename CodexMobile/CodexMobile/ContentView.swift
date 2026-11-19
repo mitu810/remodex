@@ -190,6 +190,11 @@ struct ContentView: View {
 
     private var rootContentWithConnectionObservers: some View {
         rootContentWithNavigationObservers
+            .task(id: (codex.isConnected && codex.isInitialized && codex.isAppInForeground) ? codex.secureSession?.macDeviceId : nil) {
+                guard codex.isConnected, codex.isInitialized, codex.isAppInForeground,
+                      let deviceID = codex.secureSession?.macDeviceId else { return }
+                await codex.runCredentialMaintenance(deviceID: deviceID)
+            }
             .onChange(of: scenePhase) { _, phase in
                 debugSidebarLog("scenePhase changed phase=\(String(describing: phase))")
                 codex.setForegroundState(phase != .background)
@@ -225,6 +230,15 @@ struct ContentView: View {
                 Task {
                     await attemptSavedMacReconnectRecoveryIfNeeded()
                 }
+            }
+            .onChange(of: codex.networkRouteRevision) { _, _ in
+                guard scenePhase == .active,
+                      hasSeenOnboarding,
+                      !isShowingManualScanner,
+                      !isShowingManualPairingEntry,
+                      !viewModel.isAttemptingManualReconnect,
+                      !viewModel.isSwitchingMac else { return }
+                Task { await codex.recoverConnectionAfterNetworkChange() }
             }
             .onChange(of: codex.isConnected) { wasConnected, isNowConnected in
                 debugSidebarLog("connection changed wasConnected=\(wasConnected) isConnected=\(isNowConnected)")

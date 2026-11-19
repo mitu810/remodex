@@ -4,6 +4,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct SettingsCodexCredentialsView: View {
+    @Environment(CodexService.self) private var codex
     let connectDevice: ((String) async throws -> Void)?
     @State private var profiles: [SavedCodexCredential] = []
     @State private var isImporting = false
@@ -47,7 +48,7 @@ struct SettingsCodexCredentialsView: View {
         .fileImporter(isPresented: $isImporting, allowedContentTypes: [.json], allowsMultipleSelection: true) { result in
             importCredentials(result)
         }
-        .task {
+        .task(id: codex.savedCredentialVaultRevision) {
             do { profiles = try CodexCredentialVault.load() }
             catch { notice = String(localized: "Could not read the saved credentials from Keychain.") }
         }
@@ -82,12 +83,16 @@ private struct CodexCredentialDetailView: View {
     let connectDevice: ((String) async throws -> Void)?
 
     @State private var editedName = ""
-    @State private var usage: CodexCredentialCheckResult?
-    @State private var isChecking = false
     @State private var isConfirmingDeletion = false
     @State private var notice: String?
+    @State private var usageError: String?
 
     private var profile: SavedCodexCredential? { profiles.first { $0.id == id } }
+    private var isChecking: Bool { codex.checkingSavedCredentialID == id }
+    private var canCheck: Bool {
+        codex.checkingSavedCredentialID == nil && !codex.isApplyingVaultCredential
+    }
+    private var deviceID: String? { codex.isConnected ? codex.secureSession?.macDeviceId : nil }
 
     var body: some View {
         List {
@@ -99,6 +104,14 @@ private struct CodexCredentialDetailView: View {
                     if let plan = profile.plan {
                         SettingsValueRow(title: String(localized: "Plan"), value: plan.capitalized)
                     }
+                    if let expiry = profile.effectiveAccessExpiry {
+                        SettingsValueRow(title: String(localized: "Credential Expires"),
+                                         value: expiry.formatted(date: .abbreviated, time: .shortened))
+                    }
+                    if let refreshed = profile.refreshedAt {
+                        SettingsValueRow(title: String(localized: "Last Credential Renewal"),
+                                         value: refreshed.formatted(date: .abbreviated, time: .shortened))
+                    }
                     TextField("Account name", text: $editedName)
                         .textInputAutocapitalization(.sentences)
                     SettingsButton(String(localized: "Save Name")) { saveName() }
@@ -107,30 +120,38 @@ private struct CodexCredentialDetailView: View {
 
                 SettingsCard(
                     title: String(localized: "Usage"),
-                    footer: String(localized: "Checking usage or renewing uses the currently connected paired device.")
+                    footer: String(localized: "Credentials renew automatically near expiry while Remodex is active and connected to a paired device.")
                 ) {
-                    if let usage {
+                    if let usage = profile.usageSnapshot {
                         UsageStatusSummaryContent(
                             contextWindowUsage: nil,
                             showsContextWindowSection: false,
-                            rateLimitBuckets: usage.usage,
+                            rateLimitBuckets: usage.buckets,
                             isLoadingRateLimits: false,
-                            rateLimitsErrorMessage: usage.usageUnavailable ? String(localized: "Usage is unavailable right now.") : nil,
+                            rateLimitsErrorMessage: nil,
                             showsRateLimitHeader: false,
                             refreshControl: nil
                         )
-                        SettingsValueRow(title: String(localized: "Credit balance"), value: usage.unlimited
-                            ? String(localized: "Unlimited")
-                            : usage.creditsBalance ?? String(localized: "Unavailable"))
+                        if let credits = usage.credits {
+                            SettingsValueRow(title: String(localized: "Credit balance"), value: credits.displayBalance)
+                        }
+                        SettingsValueRow(title: String(localized: "Usage Updated"),
+                                         value: usage.updatedAt.formatted(date: .abbreviated, time: .shortened))
+                    }
+                    if let usageError {
+                        SettingsInlineMessage(text: usageError, tint: .orange)
+                    }
+                    if let failure = codex.savedCredentialRenewalFailures[id] {
+                        SettingsInlineMessage(text: failure, tint: .orange)
                     }
                     SettingsButton(String(localized: "Refresh Usage"), isLoading: isChecking) {
-                        check(profile, renew: false)
+                        Task { await check(renew: false) }
                     }
-                    .disabled(!codex.isConnected || isChecking)
+                    .disabled(!canCheck)
                     SettingsButton(String(localized: "Renew Credential")) {
-                        check(profile, renew: true)
+                        Task { await check(renew: true) }
                     }
-                    .disabled(!codex.isConnected || isChecking)
+                    .disabled(!canCheck || deviceID == nil)
                 }
 
                 Section {
@@ -154,6 +175,12 @@ private struct CodexCredentialDetailView: View {
         .font(AppFont.body())
         .navigationTitle(profile?.title ?? String(localized: "Codex Accounts"))
         .onAppear { editedName = profile?.name ?? "" }
+        .task(id: id) {
+            guard Date().timeIntervalSince(profile?.usageSnapshot?.updatedAt ?? .distantPast) >= 300 else { return }
+            if let pending = codex.savedCredentialCheckTask { _ = try? await pending.value }
+            guard !Task.isCancelled else { return }
+            await check(renew: false)
+        }
         .confirmationDialog("Delete saved credential?", isPresented: $isConfirmingDeletion, titleVisibility: .visible) {
             Button("Delete", role: .destructive, action: deleteCredential)
             Button("Cancel", role: .cancel) {}
@@ -184,35 +211,14 @@ private struct CodexCredentialDetailView: View {
         }
     }
 
-    private func check(_ profile: SavedCodexCredential, renew: Bool) {
-        guard let deviceID = codex.secureSession?.macDeviceId, !isChecking else { return }
-        isChecking = true
-        notice = nil
-        Task { @MainActor in
-            defer { isChecking = false }
-            do {
-                let result = try await codex.checkSavedCredential(profile, deviceID: deviceID, renew: renew)
-                if let updatedJSON = result.credential {
-                    let updated = try SavedCodexCredential(authJSON: updatedJSON)
-                    guard updated.identity == profile.identity else { throw CodexCredentialVault.invalidCredential }
-                    profiles = try CodexCredentialVault.update { credentials in
-                        guard let index = credentials.firstIndex(where: { $0.id == profile.id }),
-                              credentials[index].authJSON == profile.authJSON,
-                              (updated.refreshedAt ?? .distantPast) >= (credentials[index].refreshedAt ?? .distantPast) else { return }
-                        credentials[index] = try SavedCodexCredential(
-                            authJSON: updatedJSON,
-                            id: profile.id,
-                            name: credentials[index].name
-                        )
-                    }
-                }
-                usage = result
-                if result.renewalFailed {
-                    notice = String(localized: "Codex did not confirm a renewed credential.")
-                }
-            } catch {
-                notice = CodexCredentialVault.displayMessage(for: error)
-            }
+    private func check(renew: Bool) async {
+        guard canCheck, !renew || deviceID != nil else { return }
+        usageError = nil
+        do {
+            try await codex.refreshSavedCredential(id: id, renewingOn: renew ? deviceID : nil)
+            if renew { codex.savedCredentialRenewalFailures.removeValue(forKey: id) }
+        } catch {
+            if !Task.isCancelled { usageError = CodexCredentialVault.displayMessage(for: error) }
         }
     }
 }

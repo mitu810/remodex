@@ -9,6 +9,7 @@ import UIKit
 
 struct UserMessageBubble: View {
     @Environment(\.colorScheme) private var colorScheme
+    @AppStorage(AppFont.Size.storageKey) private var appFontSize: AppFont.Size = .standard
     @AppStorage(UserBubbleColor.storageKey) private var userBubbleColorRawValue = UserBubbleColor.defaultStoredRawValue
     private static let bubbleCornerRadius: CGFloat = 22
     private static let darkColoredBubbleOpacity = 0.4
@@ -20,19 +21,15 @@ struct UserMessageBubble: View {
     var isProgressiveTextWindow: Bool = false
     let isRetryAvailable: Bool
     let onRetryUserMessage: (String) -> Void
-
-    @State private var previewImage: PreviewImagePayload?
+    var currentWorkingDirectory: String? = nil
 
     var body: some View {
+        let _ = appFontSize
         let bubbleColor = selectedUserBubbleColor
         let renderModel = UserBubbleRenderModelCache.model(for: message, text: text)
         UserBubbleTrailingColumn {
             if !message.attachments.isEmpty {
-                UserAttachmentStrip(attachments: message.attachments) { tappedAttachment in
-                    if let image = AttachmentPreviewImageResolver.resolve(tappedAttachment) {
-                        previewImage = PreviewImagePayload(image: image)
-                    }
-                }
+                UserAttachmentStrip(attachments: message.attachments, currentWorkingDirectory: currentWorkingDirectory)
             }
 
             if !renderModel.chips.isEmpty {
@@ -57,12 +54,6 @@ struct UserMessageBubble: View {
         }
         .uiKitContextMenu {
             userMessageMenu()
-        }
-        .fullScreenCover(item: $previewImage) { payload in
-            ZoomableImagePreviewScreen(
-                payload: payload,
-                onDismiss: { previewImage = nil }
-            )
         }
         .modifier(UserBubbleSendAppearance(isEnabled: isFreshLocalSend))
     }

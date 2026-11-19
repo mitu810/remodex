@@ -318,7 +318,7 @@ final class ContentViewModel {
         if attempt >= maxAttempts {
             codex.shouldAutoReconnectOnForeground = false
             codex.connectionRecoveryState = .idle
-            codex.lastErrorMessage = "Could not reconnect. Tap Reconnect to try again."
+            codex.lastErrorMessage = String(localized: "Could not reconnect. Tap Reconnect to try again.")
         }
     }
 }
@@ -567,7 +567,7 @@ extension ContentViewModel {
                     codex: codex
                 )
                 if prunedCount > 0 {
-                    macSwitchNotice = "Removed old saved entries for that device. Scan its QR code once if it is still missing."
+                    macSwitchNotice = String(localized: "Removed old saved entries for that device. Scan its QR code once if it is still missing.")
                 }
             }
             return trustedReconnectResolution(
@@ -696,7 +696,7 @@ extension ContentViewModel {
                 codex.secureConnectionState = .liveSessionUnresolved
                 codex.connectionRecoveryState = .idle
                 codex.shouldAutoReconnectOnForeground = false
-                codex.lastErrorMessage = "Trusted reconnect is unavailable from this relay endpoint. Update or check the relay/proxy, then reconnect. Scan a new QR code only if this device was reset."
+                codex.lastErrorMessage = String(localized: "Trusted reconnect is unavailable from this relay endpoint. Update or check the relay/proxy, then reconnect. Scan a new QR code only if this device was reset.")
                 return .stop
             }
             return .fallbackToSaved
@@ -706,7 +706,7 @@ extension ContentViewModel {
                 return .fallbackToSaved
             }
             if isConnectedToDifferentCurrentDevice(codex: codex, targetMacDeviceId: targetMacDeviceId) {
-                macSwitchNotice = "That device is not reachable yet. Make sure its bridge is connected, or rescan its QR code."
+                macSwitchNotice = String(localized: "That device is not reachable yet. Make sure its bridge is connected, or rescan its QR code.")
                 return .retryLater
             }
             codex.lastErrorMessage = message
@@ -1171,7 +1171,7 @@ extension ContentViewModel {
         codex.clearSavedRelaySession()
         codex.clearInMemoryMacScopedState()
         endMacSwitchContext(codex: codex)
-        macSwitchNotice = "Switch cancelled. Choose a device to reconnect."
+        macSwitchNotice = String(localized: "Switch cancelled. Choose a device to reconnect.")
     }
 
     private func captureRelaySessionSnapshot(from codex: CodexService) -> RelaySessionSnapshot {

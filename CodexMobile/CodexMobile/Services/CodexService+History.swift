@@ -665,7 +665,8 @@ extension CodexService {
             guard normalizedType == "image"
                     || normalizedType == "localimage"
                     || normalizedType == "inputimage"
-                    || normalizedType == "outputimage" else {
+                    || normalizedType == "outputimage"
+                    || normalizedType == "imageurl" else {
                 continue
             }
 
@@ -690,7 +691,10 @@ extension CodexService {
                 CodexImageAttachment(
                     thumbnailBase64JPEG: thumbnailBase64,
                     payloadDataURL: payloadDataURL,
-                    sourceURL: sourceURL
+                    sourceURL: sourceURL,
+                    fileName: object["fileName"]?.stringValue
+                        ?? object["file_name"]?.stringValue
+                        ?? object["filename"]?.stringValue
                 )
                 .sanitizedForStorage(
                     preservingPayloadDataURL: shouldPreserveHistoryImagePayload(payloadDataURL)
@@ -2186,9 +2190,7 @@ extension CodexService {
             value.autoApprovalReview = serverReview
             value.text = serverReview.actionSummary
         }
-        if value.attachments.isEmpty && !serverMessage.attachments.isEmpty {
-            value.attachments = serverMessage.attachments
-        }
+        value.attachments = CodexImageAttachment.mergingHistory(value.attachments, with: serverMessage.attachments)
         if value.role == .user {
             if value.fileMentions.isEmpty && !serverMessage.fileMentions.isEmpty {
                 value.fileMentions = serverMessage.fileMentions

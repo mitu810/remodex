@@ -10,6 +10,7 @@ const os = require("os");
 const path = require("path");
 const { promisify, TextDecoder } = require("util");
 const { resolveCodexGeneratedImagesRoot } = require("./codex-home");
+const { isHistoryImageReference, readHistoryImage } = require("./history-image");
 const { gitStatus } = require("./git-handler");
 const {
   workspaceCheckpointCapture,
@@ -62,7 +63,9 @@ function handleWorkspaceRequest(rawMessage, sendResponse, captureFileChunkSender
 
   const id = parsed.id;
   const params = parsed.params || {};
-  const reply = method === "workspace/readFileChunk" ? captureFileChunkSender() : sendResponse;
+  const transient = method === "workspace/readFileChunk"
+    || (method === "workspace/readImage" && isHistoryImageReference(params.path));
+  const reply = transient ? captureFileChunkSender() : sendResponse;
 
   handleWorkspaceMethod(method, params)
     .then((result) => {
@@ -245,6 +248,15 @@ async function workspaceReadImage(params) {
   const requestedPath = firstNonEmptyString([params.path, params.filePath, params.localPath]);
   if (!requestedPath) {
     throw workspaceError("missing_image_path", "The request must include an image path.");
+  }
+
+  if (isHistoryImageReference(requestedPath)) {
+    const result = readHistoryImage(requestedPath, {
+      includeData: params.includeData !== false && params.metadataOnly !== true,
+      previewMaxPixelDimension: normalizedPreviewPixelDimension(params),
+    });
+    if (result) return result;
+    throw workspaceError("history_image_unavailable", "Reopen the chat to reload this image, then tap it again.");
   }
 
   const cwd = firstNonEmptyString([params.cwd, params.currentWorkingDirectory])

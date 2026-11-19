@@ -254,7 +254,7 @@ enum CodexSecureTransportError: LocalizedError {
              .timedOut(let message):
             return message
         case .decryptFailed:
-            return "Unable to decrypt the secure Remodex payload."
+            return String(localized: "Unable to decrypt the secure Remodex payload.")
         }
     }
 }
@@ -270,9 +270,9 @@ enum CodexTrustedSessionResolveError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .noTrustedMac:
-            return "No trusted device is available to reconnect."
+            return String(localized: "No trusted device is available to reconnect.")
         case .unsupportedRelay:
-            return "This relay does not support trusted reconnect yet."
+            return String(localized: "This relay does not support trusted reconnect yet.")
         case .macOffline(let message),
              .rePairRequired(let message),
              .invalidResponse(let message),
@@ -286,21 +286,21 @@ extension CodexSecureConnectionState {
     var statusLabel: String {
         switch self {
         case .notPaired:
-            return "Not paired"
+            return String(localized: "Not paired")
         case .trustedMac:
-            return "Trusted Device"
+            return String(localized: "Trusted Device")
         case .liveSessionUnresolved:
-            return "Trusted Device ready"
+            return String(localized: "Trusted Device ready")
         case .handshaking:
-            return "Secure handshake in progress"
+            return String(localized: "Secure handshake in progress")
         case .encrypted:
-            return "End-to-end encrypted"
+            return String(localized: "End-to-end encrypted")
         case .reconnecting:
-            return "Reconnecting securely"
+            return String(localized: "Reconnecting securely")
         case .rePairRequired:
-            return "Re-pair required"
+            return String(localized: "Re-pair required")
         case .updateRequired:
-            return "Update required"
+            return String(localized: "Update required")
         }
     }
 }
@@ -380,12 +380,10 @@ func codexSecureFingerprint(for publicKeyBase64: String) -> String {
     return digest.compactMap { String(format: "%02x", $0) }.joined().prefix(12).uppercased()
 }
 
-func codexPhoneIdentityStateFromSecureStore() -> CodexPhoneIdentityState {
-    if let existing: CodexPhoneIdentityState = SecureStore.readCodable(
-        CodexPhoneIdentityState.self,
-        for: CodexSecureKeys.phoneIdentityState
-    ) {
-        return existing
+func codexPhoneIdentityStateFromSecureStore() throws -> CodexPhoneIdentityState {
+    let key = CodexSecureKeys.phoneIdentityState
+    if let data = try SecureStore.readPrivateData(for: key) {
+        return try JSONDecoder().decode(CodexPhoneIdentityState.self, from: data)
     }
 
     let privateKey = Curve25519.Signing.PrivateKey()
@@ -394,8 +392,11 @@ func codexPhoneIdentityStateFromSecureStore() -> CodexPhoneIdentityState {
         phoneIdentityPrivateKey: privateKey.rawRepresentation.base64EncodedString(),
         phoneIdentityPublicKey: privateKey.publicKey.rawRepresentation.base64EncodedString()
     )
-    SecureStore.writeCodable(next, for: CodexSecureKeys.phoneIdentityState)
-    return next
+    try SecureStore.addPairingIdentityIfAbsent(JSONEncoder().encode(next))
+    guard let stored = try SecureStore.readPrivateData(for: key) else {
+        throw CocoaError(.fileReadUnknown)
+    }
+    return try JSONDecoder().decode(CodexPhoneIdentityState.self, from: stored)
 }
 
 func codexTrustedMacRegistryFromSecureStore() -> CodexTrustedMacRegistry {

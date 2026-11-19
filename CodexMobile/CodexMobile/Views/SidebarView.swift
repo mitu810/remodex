@@ -628,6 +628,7 @@ struct SidebarView<ConnectionEmptyStatePanel: View, ConnectionEmptyStateFooter: 
                         .padding(.top, 12)
                         .padding(.bottom, 8)
 
+                    activeAccountUsageRow
                     threadList
                 }
             }
@@ -640,6 +641,31 @@ struct SidebarView<ConnectionEmptyStatePanel: View, ConnectionEmptyStateFooter: 
                 bottomActionBar
             }
             .adaptiveSoftScrollEdge(for: .top)
+        }
+    }
+
+    @ViewBuilder
+    private var activeAccountUsageRow: some View {
+        let rows = CodexRateLimitBucket.visibleDisplayRows(from: codex.rateLimitBuckets)
+        if codex.isConnected, !rows.isEmpty, !isSearchActive {
+            Button(action: openSettings) {
+                HStack(spacing: 8) {
+                    RemodexIcon.image(systemName: "gauge.with.dots.needle.50percent")
+                    Text("Usage")
+                    Spacer(minLength: 4)
+                    ForEach(rows.prefix(2)) { row in
+                        Text("\(row.label) \(row.window.remainingPercent)%")
+                            .monospacedDigit()
+                    }
+                }
+                .font(AppFont.caption(weight: .medium))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .padding(.horizontal, 16)
+            .padding(.bottom, 10)
         }
     }
 

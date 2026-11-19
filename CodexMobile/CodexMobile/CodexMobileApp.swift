@@ -12,6 +12,7 @@ struct CodexMobileApp: App {
     @Environment(\.scenePhase) private var scenePhase
     @UIApplicationDelegateAdaptor(CodexMobileAppDelegate.self) private var appDelegate
     @AppStorage(AppFont.storageKey) private var appFontStyleRawValue = AppFont.defaultStoredStyleRawValue
+    @AppStorage(AppFont.Size.storageKey) private var appFontSize: AppFont.Size = .standard
     @State private var codexService: CodexService
     @State private var petCompanionStore: PetCompanionStore
     @State private var petCompanionStatusStore: PetCompanionStatusStore
@@ -62,10 +63,10 @@ struct CodexMobileApp: App {
                     TurnCacheManager.resetAll()
                 }
                 // App init already set the appearance proxies before the first
-                // window was built, so only live style changes need a re-apply
+                // window was built, so only live font changes need a re-apply
                 // (which also walks existing windows to restyle mounted chrome).
                 // Timeline caches hold text styled with the previous face, so drop them too.
-                .onChange(of: appFontStyleRawValue) { _, _ in
+                .onChange(of: [appFontStyleRawValue, appFontSize.rawValue]) { _, _ in
                     AppTypographyController.apply()
                     TurnCacheManager.resetAll()
                 }
@@ -76,6 +77,7 @@ struct CodexMobileApp: App {
         // Reading AppStorage here invalidates the root font environment as soon
         // as Settings changes the stored style, without rebuilding ContentView.
         _ = appFontStyleRawValue
+        _ = appFontSize
         return AppFont.body()
     }
 

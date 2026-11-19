@@ -11,6 +11,7 @@ struct CodexImageAttachment: Identifiable, Codable, Hashable, Sendable {
     let thumbnailBase64JPEG: String
     let payloadDataURL: String?
     let sourceURL: String?
+    let fileName: String?
     let thumbnailContentFingerprint: CodexTextContentFingerprint
     let payloadContentFingerprint: CodexTextContentFingerprint?
     let sourceContentFingerprint: CodexTextContentFingerprint?
@@ -19,12 +20,14 @@ struct CodexImageAttachment: Identifiable, Codable, Hashable, Sendable {
         id: String = UUID().uuidString,
         thumbnailBase64JPEG: String,
         payloadDataURL: String? = nil,
-        sourceURL: String? = nil
+        sourceURL: String? = nil,
+        fileName: String? = nil
     ) {
         self.id = id
         self.thumbnailBase64JPEG = thumbnailBase64JPEG
         self.payloadDataURL = payloadDataURL
         self.sourceURL = sourceURL
+        self.fileName = fileName
         self.thumbnailContentFingerprint = CodexTextContentFingerprint(thumbnailBase64JPEG)
         self.payloadContentFingerprint = payloadDataURL.map(CodexTextContentFingerprint.init)
         self.sourceContentFingerprint = sourceURL.map(CodexTextContentFingerprint.init)
@@ -35,6 +38,7 @@ struct CodexImageAttachment: Identifiable, Codable, Hashable, Sendable {
         case thumbnailBase64JPEG
         case payloadDataURL
         case sourceURL
+        case fileName
         case thumbnailContentFingerprint
         case payloadContentFingerprint
         case sourceContentFingerprint
@@ -46,6 +50,7 @@ struct CodexImageAttachment: Identifiable, Codable, Hashable, Sendable {
         thumbnailBase64JPEG = try container.decode(String.self, forKey: .thumbnailBase64JPEG)
         payloadDataURL = try container.decodeIfPresent(String.self, forKey: .payloadDataURL)
         sourceURL = try container.decodeIfPresent(String.self, forKey: .sourceURL)
+        fileName = try container.decodeIfPresent(String.self, forKey: .fileName)
         thumbnailContentFingerprint = try container.decodeIfPresent(
             CodexTextContentFingerprint.self,
             forKey: .thumbnailContentFingerprint
@@ -72,6 +77,7 @@ struct CodexImageAttachment: Identifiable, Codable, Hashable, Sendable {
         try container.encode(thumbnailBase64JPEG, forKey: .thumbnailBase64JPEG)
         try container.encodeIfPresent(payloadDataURL, forKey: .payloadDataURL)
         try container.encodeIfPresent(sourceURL, forKey: .sourceURL)
+        try container.encodeIfPresent(fileName, forKey: .fileName)
         try container.encode(thumbnailContentFingerprint, forKey: .thumbnailContentFingerprint)
         try container.encodeIfPresent(payloadContentFingerprint, forKey: .payloadContentFingerprint)
         try container.encodeIfPresent(sourceContentFingerprint, forKey: .sourceContentFingerprint)
@@ -84,7 +90,8 @@ struct CodexImageAttachment: Identifiable, Codable, Hashable, Sendable {
             id: id,
             thumbnailBase64JPEG: thumbnailBase64JPEG,
             payloadDataURL: preservingPayloadDataURL ? normalizedPayloadDataURL : nil,
-            sourceURL: normalizedSourceURL
+            sourceURL: normalizedSourceURL,
+            fileName: fileName ?? inlineHEIFFileName
         )
     }
 
@@ -102,9 +109,51 @@ struct CodexImageAttachment: Identifiable, Codable, Hashable, Sendable {
         return id
     }
 
-    // Used by timeline renderers to avoid empty image placeholders from path-only history items.
+    // Distinguishes attachments with local preview data from path-only items.
     nonisolated var hasPreviewPayload: Bool {
         !thumbnailBase64JPEG.isEmpty || normalizedPayloadDataURL != nil
+    }
+
+    nonisolated var isElidedHistoryPlaceholder: Bool {
+        normalizedSourceURL == "remodex://history-image-elided"
+    }
+
+    nonisolated static func isHistoryImageReference(_ path: String) -> Bool {
+        guard let url = URL(string: path), url.scheme == "remodex", url.host == "history-image",
+              url.query == nil, url.fragment == nil else { return false }
+        let components = url.pathComponents.dropFirst()
+        guard components.count == 2, let digest = components.first else { return false }
+        return digest.utf8.count == 64 && digest.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) }
+    }
+
+    nonisolated static func mergingHistory(_ existing: [Self], with incoming: [Self]) -> [Self] {
+        if existing.isEmpty { return incoming }
+        guard existing.count == incoming.count else { return existing }
+        return zip(existing, incoming).map { saved, updated in
+            if saved.isElidedHistoryPlaceholder,
+               updated.hasPreviewPayload || updated.sourceURL.map(isHistoryImageReference) == true {
+                return updated
+            }
+            return saved
+        }
+    }
+
+    nonisolated var displayFileName: String? {
+        if let fileName, !fileName.isEmpty { return fileName.pathDisplayName }
+        if let source = normalizedSourceURL {
+            if isElidedHistoryPlaceholder { return nil }
+            let path = URL(string: source)?.path.removingPercentEncoding ?? source
+            return path.pathDisplayName
+        }
+        return inlineHEIFFileName
+    }
+
+    private nonisolated var inlineHEIFFileName: String? {
+        guard let payloadDataURL else { return nil }
+        let header = payloadDataURL.prefix(32).lowercased()
+        if header.hasPrefix("data:image/heic;") { return "Image.heic" }
+        if header.hasPrefix("data:image/heif;") { return "Image.heif" }
+        return nil
     }
 
     nonisolated private var normalizedPayloadDataURL: String? {

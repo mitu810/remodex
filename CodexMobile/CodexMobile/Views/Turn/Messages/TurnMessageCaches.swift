@@ -139,9 +139,9 @@ enum MessageRowRenderModelCache {
             let assistantTextWithoutImageSyntax = assistantImageReferences.isEmpty
                 ? nil
                 : AssistantMarkdownImageReferenceParser.visibleTextRemovingImageSyntax(from: displayText)
-            let assistantInlineContentSegments = assistantImageReferences.contains(where: \.isTemporaryScreenshotImage)
-                ? AssistantMarkdownImageReferenceParser.contentSegmentsPreservingTemporaryImages(from: displayText)
-                : []
+            let assistantInlineContentSegments = assistantImageReferences.isEmpty
+                ? []
+                : AssistantMarkdownImageReferenceParser.contentSegmentsPreservingImagePositions(from: displayText)
             let assistantRenderText = assistantTextWithoutImageSyntax ?? displayText
             // Defer Mermaid parsing until the assistant row is finalized so streaming deltas
             // keep the lightweight append-only path and avoid repeated parser/WebKit churn.

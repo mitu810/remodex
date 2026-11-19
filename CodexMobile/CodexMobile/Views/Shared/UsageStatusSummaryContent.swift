@@ -172,14 +172,14 @@ struct UsageStatusSummaryContent: View {
                     .font(AppFont.mono(.callout))
                     .foregroundStyle(.primary)
 
-                if let resetText = resetLabel(for: row.window) {
-                    Text("(\(resetText))")
-                        .font(AppFont.mono(.caption))
-                        .foregroundStyle(.secondary)
-                }
             }
 
             progressBar(progress: Double(row.window.clampedUsedPercent) / 100)
+            if let resetText = resetLabel(for: row.window) {
+                Text(resetText)
+                    .font(AppFont.caption())
+                    .foregroundStyle(.secondary)
+            }
         }
     }
 
@@ -265,17 +265,7 @@ struct UsageStatusSummaryContent: View {
     private func resetLabel(for window: CodexRateLimitWindow) -> String? {
         guard let resetsAt = window.resetsAt else { return nil }
 
-        let calendar = Calendar.current
-        let now = Date()
-
-        if calendar.isDate(resetsAt, inSameDayAs: now) {
-            let formatter = DateFormatter()
-            formatter.dateFormat = "HH:mm"
-            return "resets \(formatter.string(from: resetsAt))"
-        }
-
-        let formatter = DateFormatter()
-        formatter.dateFormat = "d MMM HH:mm"
-        return "resets \(formatter.string(from: resetsAt))"
+        let date = resetsAt.formatted(date: .abbreviated, time: .shortened)
+        return String(localized: "Resets at \(date)")
     }
 }

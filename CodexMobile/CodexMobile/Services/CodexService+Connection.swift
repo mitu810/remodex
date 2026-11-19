@@ -29,7 +29,7 @@ extension CodexService {
         5_000_000_000,
     ]
     private static let trustedReconnectRecoveryMessage =
-        "Secure reconnect could not be restored from the saved session. Try reconnecting again."
+        String(localized: "Secure reconnect could not be restored from the saved session. Try reconnecting again.")
 
     // Models how one socket failure should affect reconnect state, pairing persistence, and UI copy.
     private struct ReceiveErrorDisposition {
@@ -809,7 +809,11 @@ extension CodexService {
 
     // Identifies reconnects that should reuse a previously trusted Mac instead of going through QR bootstrap.
     var hasTrustedReconnectContext: Bool {
-        guard hasSavedRelaySession,
+        hasSavedRelaySession && hasTrustedRelayDevice
+    }
+
+    private var hasTrustedRelayDevice: Bool {
+        guard normalizedRelayURL != nil,
               !shouldForceQRBootstrapOnNextHandshake,
               let relayMacDeviceId = normalizedRelayMacDeviceId,
               normalizedCurrentTrustedMacDeviceId == nil || normalizedCurrentTrustedMacDeviceId == relayMacDeviceId else {
@@ -817,6 +821,25 @@ extension CodexService {
         }
 
         return trustedMacRegistry.records[relayMacDeviceId] != nil
+    }
+
+    // A new route can reach the same trusted device after the previous path failed.
+    func recoverConnectionAfterNetworkChange() async {
+        if isConnected {
+            await probeForegroundConnectionIfNeeded()
+            return
+        }
+        // A stale session can be discarded while the trusted relay device is still selected.
+        guard !isConnecting, !shouldForceQRBootstrapOnNextHandshake,
+              hasTrustedRelayDevice || hasTrustedMacReconnectCandidate,
+              secureConnectionState != .updateRequired else {
+            return
+        }
+        if secureConnectionState == .rePairRequired {
+            restoreTrustedPairPresentationState()
+            lastErrorMessage = nil
+        }
+        shouldAutoReconnectOnForeground = true
     }
 
     // Counts reconnect handshake failures so repeated stale-session wakeups can fall back to
@@ -995,7 +1018,7 @@ extension CodexService {
             case .posix(let code) where code == .ENETDOWN || code == .ENETUNREACH || code == .EHOSTUNREACH:
                 return "Cannot reach relay server at \(attemptedURL). Check that the iPhone can access the paired device on the local network."
             case .posix(let code) where code == .ETIMEDOUT:
-                return "Connection timed out. Check server/network."
+                return String(localized: "Connection timed out. Check server/network.")
             case .dns(let code):
                 return "Cannot resolve server host (\(code)). Check the relay URL."
             default:
@@ -1004,7 +1027,7 @@ extension CodexService {
         }
 
         if isRecoverableTransientConnectionError(error) {
-            return "Connection timed out. Check server/network."
+            return String(localized: "Connection timed out. Check server/network.")
         }
 
         let nsError = error as NSError
@@ -1062,16 +1085,20 @@ extension CodexService {
             }
         }
 
-        if let nwError = error as? NWError {
-            if case .posix(let code) = nwError,
-               code == .ETIMEDOUT {
-                return true
-            }
+        let recoverablePOSIXErrors: Set<POSIXErrorCode> = [
+            .ETIMEDOUT, .ENETDOWN, .ENETUNREACH, .EHOSTUNREACH, .ENETRESET, .ECONNRESET, .EPIPE,
+        ]
+        if let nwError = error as? NWError, case .posix(let code) = nwError {
+            return recoverablePOSIXErrors.contains(code)
         }
 
         let nsError = error as NSError
+        if nsError.domain == NSURLErrorDomain {
+            return [NSURLErrorTimedOut, NSURLErrorNetworkConnectionLost, NSURLErrorNotConnectedToInternet]
+                .contains(nsError.code)
+        }
         return nsError.domain == NSPOSIXErrorDomain
-            && nsError.code == Int(POSIXErrorCode.ETIMEDOUT.rawValue)
+            && recoverablePOSIXErrors.contains { Int($0.rawValue) == nsError.code }
     }
 
     // Detects connect-time relay closes that still leave the saved session reusable moments later.
@@ -1145,16 +1172,16 @@ extension CodexService {
             return retryableSessionUnavailableMessage
         }
         if relayCloseCodeRawValue(fromConnectError: error) == 4003 {
-            return "A newer Remodex connection replaced this socket. Tap Reconnect to try again."
+            return String(localized: "A newer Remodex connection replaced this socket. Tap Reconnect to try again.")
         }
         if isOversizedRelayPayloadError(error) {
             return oversizedRelayPayloadMessage
         }
         if shouldTreatSendFailureAsDisconnect(error) || isBenignBackgroundDisconnect(error) {
-            return "Connection was interrupted. Tap Reconnect to try again."
+            return String(localized: "Connection was interrupted. Tap Reconnect to try again.")
         }
         if isRecoverableTransientConnectionError(error) {
-            return "Connection timed out. Check server/network."
+            return String(localized: "Connection timed out. Check server/network.")
         }
         return error.localizedDescription
     }

@@ -125,10 +125,13 @@ struct MarkdownTextView: View {
     var linkColor: Color? = nil
 
     @Environment(\.colorScheme) private var colorScheme
+    @AppStorage(AppFont.Size.storageKey) private var appFontSize: AppFont.Size = .standard
     @AppStorage(UserBubbleColor.storageKey)
     private var userBubbleColorRawValue = UserBubbleColor.defaultStoredRawValue
 
     var body: some View {
+        // Track the size even when the parent is an equatable timeline row.
+        let _ = appFontSize
         let resolved: (markup: String, parser: any MarkupParser) = {
             if let preparsed {
                 return (preparsed.revision, IdentityMarkupParser(value: preparsed.value))

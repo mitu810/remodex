@@ -3,7 +3,9 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
-const { activeCredentialFingerprint, credentialFingerprint, queryCredential, replaceCodexCredential } = require("../src/account-credentials");
+const {
+  activeCredentialFingerprint, createCredentialCheckRecovery, credentialFingerprint, queryCredential, replaceCodexCredential,
+} = require("../src/account-credentials");
 
 function credential(accountId, lastRefresh) {
   const payload = Buffer.from(JSON.stringify({ sub: "fixture-user" })).toString("base64url");
@@ -19,6 +21,47 @@ function fixture(t) {
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   return home;
 }
+
+test("a lost renewal reply is recoverable by the submitted credential only until its TTL expires", () => {
+  let now = 100;
+  const recovery = createCredentialCheckRecovery({ now: () => now, ttlMs: 500 });
+  const before = credential("one", "2026-11-01T00:00:00Z");
+  const updated = credential("one", "2026-11-19T00:00:00Z");
+  recovery.remember(before, { credential: updated, usageUnavailable: true });
+  assert.equal(recovery.read(before)?.credential, updated);
+  assert.equal(recovery.read(updated), null);
+  now = 600;
+  assert.equal(recovery.read(before), null);
+});
+
+test("a rotated credential survives the isolated Codex process closing before usage is returned", async () => {
+  const before = credential("one", "2026-11-01T00:00:00Z");
+  const updated = credential("one", "2026-11-19T00:00:00Z");
+  let home;
+  const result = await queryCredential(before, {
+    renew: true,
+    createTransport({ env }) {
+      home = env.CODEX_HOME;
+      let onMessage, onClose;
+      return {
+        onStarted(handler) { queueMicrotask(handler); },
+        onError() {},
+        onMessage(handler) { onMessage = handler; },
+        onClose(handler) { onClose = handler; },
+        shutdown() { onClose(); },
+        send(raw) {
+          const { id, method } = JSON.parse(raw);
+          if (method === "initialized") return;
+          if (method === "account/read") fs.writeFileSync(path.join(home, "auth.json"), updated);
+          if (method === "account/rateLimits/read") return onClose();
+          onMessage(JSON.stringify({ id, result: {} }));
+        },
+      };
+    },
+  });
+  assert.deepEqual(result, { credential: updated, usageUnavailable: true });
+  assert.equal(fs.existsSync(home), false);
+});
 
 test("matches the live ChatGPT account without returning its token or confusing workspaces", () => {
   const saved = credential("workspace/one");

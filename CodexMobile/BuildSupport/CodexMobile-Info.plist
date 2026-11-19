@@ -68,6 +68,8 @@
 	<string>$(PHODEX_CHATGPT_CALLBACK_SCHEME)</string>
 	<key>PHODEX_DEFAULT_RELAY_URL</key>
 	<string>$(PHODEX_DEFAULT_RELAY_URL)</string>
+	<key>CODEX_ACCOUNT_USAGE_URL</key>
+	<string>https://chatgpt.com/backend-api/wham/usage</string>
 	<key>REVENUECAT_PUBLIC_API_KEY</key>
 	<string>$(REVENUECAT_PUBLIC_API_KEY)</string>
 	<key>REVENUECAT_ENTITLEMENT_NAME</key>

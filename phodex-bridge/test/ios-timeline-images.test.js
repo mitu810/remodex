@@ -23,6 +23,7 @@ test("completed assistant image cards remain visible beside the final answer", {
   const binary = path.join(directory, "timeline-images");
   execFileSync("xcrun", ["swiftc", "-parse-as-library",
     parser, path.join(mobile, "Models/String+PathDisplayName.swift"), path.join(mobile, "Models/RemoteHostPath.swift"),
+    path.join(mobile, "Models/CodexImageAttachment.swift"), path.join(mobile, "Models/CodexTextContentFingerprint.swift"),
     ...["TurnMessageRegexCache", "ThinkingDisclosureParser", "CodeCommentDirectiveParser"]
       .map((name) => path.join(messages, `${name}.swift`)),
     path.join(mobile, "Views/Turn/Timeline/TurnTimelineRenderProjection.swift"),

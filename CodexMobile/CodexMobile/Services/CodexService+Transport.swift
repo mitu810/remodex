@@ -434,6 +434,8 @@ extension CodexService {
         guard isConnected, isInitialized, isAppInForeground else {
             return
         }
+        let probedConnection = webSocketConnection
+        let probedTask = webSocketTask
 
         let result = await foregroundConnectionProbeResult(
             timeoutNanoseconds: webSocketForegroundProbeTimeoutOverrideNanoseconds
@@ -442,6 +444,8 @@ extension CodexService {
 
         if case .failure(let error) = result,
            isAppInForeground,
+           webSocketConnection === probedConnection,
+           webSocketTask === probedTask,
            isConnected || isInitialized {
             handleReceiveError(error)
         }

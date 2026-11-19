@@ -24,7 +24,7 @@ const {
 const { createCodexTransport } = require("./codex-transport");
 const {
   accountError, activeCredentialFingerprint, credentialFingerprint, credentialIdentity,
-  queryCredential, readInstalledCredential, replaceCodexCredential,
+  createCredentialCheckRecovery, queryCredential, readInstalledCredential, replaceCodexCredential,
 } = require("./account-credentials");
 const { resolveCodexHome } = require("./codex-home");
 const { createOpenCodeRuntime } = require("./opencode-runtime");
@@ -41,6 +41,7 @@ const { readDaemonConfig, resolveBridgeLogsDir, writeDaemonConfig } = require(".
 const { handleGitRequest } = require("./git-handler");
 const { handleThreadContextRequest } = require("./thread-context-handler");
 const { handleWorkspaceRequest, workspaceImageResponseFits } = require("./workspace-handler");
+const { sanitizeInlineHistoryImageContentItem } = require("./history-image");
 const { handleProjectRequest, isBridgeProjectMethod } = require("./project-handler");
 const { handlePetRequest } = require("./pet-handler");
 const { createNotificationsHandler } = require("./notifications-handler");
@@ -105,7 +106,6 @@ const {
 const { buildApplyPatchFileChangeItem } = require("./apply-patch-changes");
 
 const execFileAsync = promisify(execFile);
-const RELAY_HISTORY_IMAGE_REFERENCE_URL = "remodex://history-image-elided";
 const MAX_ENDPOINT_REPLY_PLAINTEXT_BYTES = 11 * 1024 * 1024;
 const BRIDGE_MANAGED_REQUEST_ID_PREFIX = "bridge-managed-";
 const RELAY_THREAD_PAYLOAD_SOFT_LIMIT_BYTES = 4 * 1024 * 1024;
@@ -870,6 +870,7 @@ function startBridgeSession({
   const archivedOpenCodeThreadCatalog = new Map();
   let openCodeCatalogRefresh = null;
   let credentialOperation = null;
+  let credentialCheckRecovery = createCredentialCheckRecovery();
   let pendingCredentialReload = false;
   let credentialRestartScheduled = false;
   let shutdownPromise;
@@ -924,6 +925,7 @@ function startBridgeSession({
     displayName: os.hostname(),
     onTrustedPhoneUpdate(nextDeviceState) {
       deviceState = nextDeviceState;
+      credentialCheckRecovery = createCredentialCheckRecovery();
       sendRelayRegistrationUpdate(nextDeviceState);
     },
     onSecureSessionReady(session) {
@@ -1967,7 +1969,18 @@ function startBridgeSession({
       return true;
     }
     credentialOperation = isApply ? "apply" : "check";
-    handleCredentialOperation(parsed.params, isApply)
+    const recovery = isApply ? null : credentialCheckRecovery;
+    const submittedCredential = parsed.params?.credential;
+    Promise.resolve().then(() => {
+      const cached = recovery && typeof submittedCredential === "string"
+        && Buffer.byteLength(submittedCredential) <= 128 * 1024
+        ? recovery.read(submittedCredential) : null;
+      if (cached) return cached;
+      return handleCredentialOperation(parsed.params, isApply).then((result) => {
+        recovery?.remember(submittedCredential, result);
+        return result;
+      });
+    })
       .then((result) => {
         const restartScheduled = autoRestart && result.restartRequired;
         credentialRestartScheduled = restartScheduled;
@@ -4941,9 +4954,15 @@ function sanitizeLiveUserNotification(parsed) {
     if (!isUserRoleItem(item)) {
       return parsed;
     }
-    const sanitizedItem = sanitizeUserRoleItem(item);
+    let sanitizedItem = sanitizeUserRoleItem(item);
     if (!sanitizedItem) {
       return null;
+    }
+    if (Array.isArray(sanitizedItem.content)) {
+      const content = sanitizedItem.content.map(sanitizeInlineHistoryImageContentItem);
+      if (content.some((part, index) => part !== sanitizedItem.content[index])) {
+        sanitizedItem = { ...sanitizedItem, content };
+      }
     }
     return sanitizedItem === item ? parsed : {
       ...parsed,
@@ -5212,65 +5231,10 @@ function liveGeneratedImageThreadId(params) {
     || "";
 }
 
-// Converts `data:image/...` history content into a tiny placeholder the iPhone can render safely.
-function sanitizeInlineHistoryImageContentItem(contentItem) {
-  if (!contentItem || typeof contentItem !== "object") {
-    return contentItem;
-  }
-
-  const normalizedType = normalizeRelayHistoryContentType(contentItem.type);
-  if (!isRelayHistoryImageContentType(normalizedType)) {
-    return contentItem;
-  }
-
-  const hasInlineUrl = hasInlineHistoryImageDataURL(contentItem.url)
-    || hasInlineHistoryImageDataURL(contentItem.image_url)
-    || hasInlineHistoryImageDataURL(contentItem.path);
-  if (!hasInlineUrl) {
-    return contentItem;
-  }
-
-  const {
-    url: _url,
-    image_url: _imageUrl,
-    path: _path,
-    ...rest
-  } = contentItem;
-
-  return {
-    ...rest,
-    url: RELAY_HISTORY_IMAGE_REFERENCE_URL,
-  };
-}
-
 function normalizeRelayHistoryContentType(value) {
   return typeof value === "string"
     ? value.toLowerCase().replace(/[\s_-]+/g, "")
     : "";
-}
-
-// Covers Codex history variants such as image, local_image, and input_image.
-function isRelayHistoryImageContentType(normalizedType) {
-  return normalizedType === "image"
-    || normalizedType === "localimage"
-    || normalizedType === "inputimage"
-    || normalizedType === "outputimage";
-}
-
-function hasInlineHistoryImageDataURL(value) {
-  if (typeof value === "string") {
-    return value.toLowerCase().startsWith("data:image");
-  }
-
-  if (Array.isArray(value)) {
-    return value.some(hasInlineHistoryImageDataURL);
-  }
-
-  if (value && typeof value === "object") {
-    return Object.values(value).some(hasInlineHistoryImageDataURL);
-  }
-
-  return false;
 }
 
 function parseBridgeJSON(value) {

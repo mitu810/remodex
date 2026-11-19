@@ -692,6 +692,7 @@ final class CodexService {
     var recentActivityLineByThread: [String: CodexRecentActivityLine] = [:]
     var contextWindowUsageByThread: [String: ContextWindowUsage] = [:]
     var rateLimitBuckets: [CodexRateLimitBucket] = []
+    var accountUsageCredits: CodexAccountUsageCredits?
     // Distinguishes "not loaded yet" from "loaded successfully, but no visible buckets exist".
     var hasResolvedRateLimitsSnapshot = false
     var isLoadingRateLimits = false
@@ -751,6 +752,8 @@ final class CodexService {
     // bandwidth usage on constrained connections (Low Data Mode, hotspot tethering).
     var isConstrainedNetwork = false
     @ObservationIgnored var networkPathMonitor: NWPathMonitor?
+    @ObservationIgnored private var lastNetworkPath: NWPath?
+    private(set) var networkRouteRevision = 0
     var threadListSyncTask: Task<Void, Never>?
     var activeThreadSyncTask: Task<Void, Never>?
     var runningThreadWatchSyncTask: Task<Void, Never>?
@@ -792,7 +795,7 @@ final class CodexService {
         bridgeCanInstallRelease && bridgeHostCapabilities.bridgeUpdate
     }
     var hostComputerLabel: String {
-        gptAccountSnapshot.hostPlatform?.displayName ?? "computer"
+        gptAccountSnapshot.hostPlatform?.displayName ?? String(localized: "computer")
     }
     // Remembers whether the current plan flow is staying native or has fallen back to inferred UI.
     var planSessionSourceByThread: [String: CodexPlanSessionSource] = [:] {
@@ -818,6 +821,12 @@ final class CodexService {
     var pushRegistrationGeneration = 0
     var shouldAutoReconnectOnForeground = false
     var managedCredentialStatusByDeviceID: [String: String]
+    @ObservationIgnored var savedCredentialCheckTask: Task<Void, Error>?
+    @ObservationIgnored var lastCredentialRenewalAttempt: [UUID: Date] = [:]
+    var checkingSavedCredentialID: UUID?
+    var isApplyingVaultCredential = false
+    var savedCredentialVaultRevision = 0
+    var savedCredentialRenewalFailures: [UUID: String] = [:]
     var managedCredentialRestartingDeviceIDs: Set<String> = []
     var liveManagedCredentialDeviceID: String?
     var managedCredentialDesktopRestartFailed = false
@@ -826,7 +835,6 @@ final class CodexService {
     var backgroundTurnGraceExpiredUntilForeground = false
     var secureSession: CodexSecureSession?
     var pendingHandshake: CodexPendingHandshake?
-    var phoneIdentityState: CodexPhoneIdentityState
     var trustedMacRegistry: CodexTrustedMacRegistry
     var currentTrustedMacDeviceId: String?
     var lastTrustedMacDeviceId: String?
@@ -932,7 +940,6 @@ final class CodexService {
             defaults.dictionary(forKey: Self.managedCredentialStatusDefaultsKey) as? [String: String] ?? [:]
         self.userNotificationCenter = userNotificationCenter ?? UNUserNotificationCenter.current()
         self.remoteNotificationRegistrar = remoteNotificationRegistrar ?? CodexApplicationRemoteNotificationRegistrar()
-        self.phoneIdentityState = codexPhoneIdentityStateFromSecureStore()
         self.trustedMacRegistry = codexTrustedMacRegistryFromSecureStore()
         self.currentTrustedMacDeviceId = SecureStore.readString(for: CodexSecureKeys.currentTrustedMacDeviceId)
         self.lastTrustedMacDeviceId = SecureStore.readString(for: CodexSecureKeys.lastTrustedMacDeviceId)
@@ -1041,6 +1048,11 @@ final class CodexService {
             let constrained = path.isConstrained
             Task { @MainActor [weak self] in
                 guard let self else { return }
+                let previousPath = self.lastNetworkPath
+                self.lastNetworkPath = path
+                if let previousPath, path.status == .satisfied, previousPath != path {
+                    self.networkRouteRevision &+= 1
+                }
                 if self.isConstrainedNetwork != constrained {
                     self.isConstrainedNetwork = constrained
                     if self.isConnected, self.isInitialized {

@@ -1756,6 +1756,7 @@ extension CodexService {
         turnId: String?,
         text: String,
         fileMentions: [String] = [],
+        attachments: [CodexImageAttachment] = [],
         itemId: String? = nil,
         createdAt: Date? = nil
     ) {
@@ -1817,6 +1818,13 @@ extension CodexService {
                 messagesByThread[threadId]?[existingIndex].fileMentions = fileMentions
                 didMutate = true
             }
+            if let existing = messagesByThread[threadId]?[existingIndex].attachments {
+                let updated = CodexImageAttachment.mergingHistory(existing, with: attachments)
+                if existing != updated {
+                    messagesByThread[threadId]?[existingIndex].attachments = updated
+                    didMutate = true
+                }
+            }
             if let createdAt,
                CodexTimestampParser.isTrustworthyServerDate(createdAt),
                let existingCreatedAt = messagesByThread[threadId]?[existingIndex].createdAt,
@@ -1852,6 +1860,7 @@ extension CodexService {
                 turnId: turnId,
                 itemId: normalizedItemId,
                 deliveryState: .confirmed,
+                attachments: attachments,
                 orderIndex: orderIndex
             )
         )

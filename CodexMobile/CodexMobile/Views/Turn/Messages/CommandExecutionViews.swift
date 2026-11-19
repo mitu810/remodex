@@ -53,7 +53,12 @@ nonisolated struct AssistantMarkdownImageReference: Identifiable, Equatable {
         self.altText = altText
     }
 
-    var fileName: String { path.pathDisplayName }
+    var fileName: String {
+        if CodexImageAttachment.isHistoryImageReference(path), let url = URL(string: path) {
+            return url.lastPathComponent
+        }
+        return path.pathDisplayName
+    }
 
     var displayTitle: String {
         let trimmedAlt = altText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -71,7 +76,7 @@ nonisolated struct AssistantMarkdownImageReference: Identifiable, Equatable {
     // Mirrors the bridge allowlist so timeline image cards do not advertise previews
     // that `workspace/readImage` will reject on tap.
     func canPreview(currentWorkingDirectory: String?) -> Bool {
-        if isTemporaryScreenshotImage || isCodexGeneratedImage {
+        if isTemporaryScreenshotImage || isCodexGeneratedImage || CodexImageAttachment.isHistoryImageReference(path) {
             return true
         }
 
@@ -167,8 +172,8 @@ nonisolated enum AssistantMarkdownImageReferenceParser {
         return transformedLines.joined(separator: "\n")
     }
 
-    // Keeps temporary screenshots in their authored markdown position while generated images remain trailing previews.
-    static func contentSegmentsPreservingTemporaryImages(from text: String) -> [AssistantMarkdownContentSegment] {
+    // Splits text at image references so each preview stays at its authored position.
+    static func contentSegmentsPreservingImagePositions(from text: String) -> [AssistantMarkdownContentSegment] {
         var segments: [AssistantMarkdownContentSegment] = []
         var isInsideFence = false
         var occurrenceIndex = 0
@@ -216,9 +221,7 @@ nonisolated enum AssistantMarkdownImageReferenceParser {
                     occurrenceIndex: occurrenceIndex
                 )
                 occurrenceIndex += 1
-                if reference.isTemporaryScreenshotImage {
-                    segments.append(.image(reference))
-                }
+                segments.append(.image(reference))
 
                 cursor = match.range.location + match.range.length
             }

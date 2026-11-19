@@ -9,6 +9,30 @@ import SwiftUI
 import UIKit
 
 enum AppFont {
+    enum Size: String, CaseIterable {
+        case standard
+        case large
+        case extraLarge
+
+        static let storageKey = "codex.appFontSize"
+
+        var title: String {
+            switch self {
+            case .standard: String(localized: "Default")
+            case .large: String(localized: "Large")
+            case .extraLarge: String(localized: "Extra Large")
+            }
+        }
+
+        var scale: CGFloat {
+            switch self {
+            case .standard: 1
+            case .large: 1.15
+            case .extraLarge: 1.3
+            }
+        }
+    }
+
     enum Style: String, CaseIterable, Identifiable {
         case system
         case systemRounded
@@ -52,6 +76,9 @@ enum AppFont {
     // MARK: - Read preference
 
     static var currentStyle: Style { resolvedStoredStyle }
+    static var currentSize: Size {
+        UserDefaults.standard.string(forKey: Size.storageKey).flatMap(Size.init(rawValue:)) ?? .standard
+    }
 
     // MARK: - Private helpers
 
@@ -155,7 +182,7 @@ enum AppFont {
         fallbackTextStyle: UIFont.TextStyle
     ) -> UIFont {
         let selectedStyle = currentStyle
-        let adjustedSize = max(size + fontSizeAdjustment(for: selectedStyle), 1)
+        let adjustedSize = max((size + fontSizeAdjustment(for: selectedStyle)) * currentSize.scale, 1)
         let metrics = UIFontMetrics(forTextStyle: fallbackTextStyle)
 
         if selectedStyle == .system || selectedStyle == .systemRounded {
@@ -237,7 +264,7 @@ enum AppFont {
         weight: Font.Weight,
         fallbackTextStyle: UIFont.TextStyle
     ) -> UIFont {
-        let adjustedSize = max(size + monoSizeAdjustment(), 1)
+        let adjustedSize = max((size + monoSizeAdjustment()) * currentSize.scale, 1)
         let metrics = UIFontMetrics(forTextStyle: fallbackTextStyle)
 
         if let faceName = resolvedMonoFaceName(for: weight, size: adjustedSize),
@@ -252,7 +279,7 @@ enum AppFont {
     }
 
     private static func monoFont(size: CGFloat, weight: Font.Weight, style: Font.TextStyle) -> Font {
-        let adjustedSize = max(size + monoSizeAdjustment(), 1)
+        let adjustedSize = max((size + monoSizeAdjustment()) * currentSize.scale, 1)
         if let faceName = resolvedMonoFaceName(for: weight, size: adjustedSize) {
             return .custom(faceName, size: adjustedSize, relativeTo: style)
         }
@@ -283,7 +310,7 @@ enum AppFont {
         systemDesign: Font.Design = .default
     ) -> Font {
         let selectedStyle = currentStyle
-        let adjustedSize = max(size + fontSizeAdjustment(for: selectedStyle), 1)
+        let adjustedSize = max((size + fontSizeAdjustment(for: selectedStyle)) * currentSize.scale, 1)
 
         if selectedStyle == .system || selectedStyle == .systemRounded {
             return scaledSystemFont(

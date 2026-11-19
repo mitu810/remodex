@@ -11,7 +11,7 @@ struct ComposerAccessModeControl: View {
     let isInteractionLocked: Bool
     let onSelect: (CodexAccessMode) -> Void
 
-    private let controlSize: CGFloat = 32
+    var controlSize: CGFloat = 32
     private let iconSize: CGFloat = 20
     private let labelColor = Color(.secondaryLabel)
 

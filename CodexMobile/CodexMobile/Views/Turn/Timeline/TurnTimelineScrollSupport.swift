@@ -108,9 +108,30 @@ enum TurnTimelinePendingAssistantState {
 @MainActor
 final class TurnTimelineNativeScrollController {
     private weak var scrollView: UIScrollView?
+    private(set) var historyAnchorOrigin: HistoryAnchorOrigin?
+
+    nonisolated struct HistoryAnchorOrigin: Equatable, Sendable {
+        let itemID: String
+        let y: CGFloat
+    }
 
     func attach(_ scrollView: UIScrollView) {
         self.scrollView = scrollView
+    }
+
+    func recordHistoryAnchorOrigin(_ origin: HistoryAnchorOrigin) {
+        historyAnchorOrigin = origin
+    }
+
+    func restoreAfterPrepending(from previous: HistoryAnchorOrigin, to current: HistoryAnchorOrigin) {
+        guard let scrollView, previous.itemID == current.itemID else { return }
+        let minimumY = -scrollView.adjustedContentInset.top
+        let maximumY = max(minimumY, scrollView.contentSize.height
+            - scrollView.bounds.height + scrollView.adjustedContentInset.bottom)
+        let shiftedY = max(minimumY, scrollView.contentOffset.y) + current.y - previous.y
+        let targetY = min(max(shiftedY, minimumY), maximumY)
+        guard abs(scrollView.contentOffset.y - targetY) > 0.5 else { return }
+        scrollView.setContentOffset(CGPoint(x: scrollView.contentOffset.x, y: targetY), animated: false)
     }
 
     func cancelUserMomentum() {

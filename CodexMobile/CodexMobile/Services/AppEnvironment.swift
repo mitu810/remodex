@@ -34,6 +34,13 @@ enum AppEnvironment {
         return defaultRelayURLString
     }
 
+    static var codexAccountUsageURL: URL? {
+        guard let value = resolvedString(forInfoPlistKey: "CODEX_ACCOUNT_USAGE_URL"),
+              let url = URL(string: value), url.scheme == "https", url.host?.isEmpty == false,
+              url.user == nil, url.password == nil, url.query == nil, url.fragment == nil else { return nil }
+        return url
+    }
+
     // Reads the public RevenueCat key shipped with the client build.
     static var revenueCatPublicAPIKey: String? {
         resolvedString(forInfoPlistKey: revenueCatPublicAPIKeyInfoPlistKey)

@@ -36,58 +36,85 @@ private enum UserAttachmentThumbnailCache {
     }
 }
 
-private struct UserAttachmentThumbnailView: View {
-    let attachment: CodexImageAttachment
-    private let side = TurnAttachmentThumbnailMetrics.side
-    private let cornerRadius = TurnAttachmentThumbnailMetrics.cornerRadius
+struct TimelineImageThumbnail: View {
+    let image: UIImage?
+    var side: CGFloat = TurnAttachmentThumbnailMetrics.side
 
     var body: some View {
-        if let image = thumbnailUIImage {
-            Image(uiImage: image)
-                .resizable()
-                .scaledToFill()
-                .frame(width: side, height: side)
-                .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                        .stroke(Color(.separator), lineWidth: 1)
-                )
-        } else {
-            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                .fill(Color(.secondarySystemFill))
-                .frame(width: side, height: side)
-                .overlay(
-                    RemodexIcon.image(systemName: "photo")
-                        .foregroundStyle(.secondary)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                        .stroke(Color(.separator), lineWidth: 1)
-                )
+        let shape = RoundedRectangle(cornerRadius: TurnAttachmentThumbnailMetrics.cornerRadius)
+        ZStack {
+            shape.fill(Color(.secondarySystemFill))
+            if let image {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFit()
+            } else {
+                RemodexIcon.image(systemName: "photo")
+                    .foregroundStyle(.secondary)
+            }
         }
-    }
-
-    private var thumbnailUIImage: UIImage? {
-        UserAttachmentThumbnailCache.image(for: attachment)
+        .frame(width: side, height: side)
+        .clipShape(shape)
+        .overlay { shape.strokeBorder(Color(.separator).opacity(0.6)) }
+        .contentShape(shape)
     }
 }
 
 struct UserAttachmentStrip: View {
     let attachments: [CodexImageAttachment]
-    let onTap: (CodexImageAttachment) -> Void
+    var currentWorkingDirectory: String? = nil
+    var alignment: HorizontalAlignment = .trailing
+
+    @State private var previewImage: PreviewImagePayload?
+    @State private var isPreviewUnavailable = false
+    @State private var previewErrorText = ""
 
     var body: some View {
-        HStack(alignment: .top, spacing: 8) {
+        VStack(alignment: alignment, spacing: 4) {
             ForEach(attachments) { attachment in
-                Button {
-                    HapticFeedback.shared.triggerImpactFeedback(style: .light)
-                    onTap(attachment)
-                } label: {
-                    UserAttachmentThumbnailView(attachment: attachment)
+                if !attachment.hasPreviewPayload,
+                   let reference = Self.workspaceReference(for: attachment, cwd: currentWorkingDirectory) {
+                    AssistantMarkdownImagePreviewButton(reference: reference, currentWorkingDirectory: currentWorkingDirectory)
+                } else {
+                    attachmentButton(attachment)
                 }
-                .buttonStyle(.plain)
             }
         }
+        .fullScreenCover(item: $previewImage) { payload in
+            ZoomableImagePreviewScreen(payload: payload, onDismiss: { previewImage = nil })
+        }
+        .alert("Image unavailable", isPresented: $isPreviewUnavailable) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(previewErrorText)
+        }
+    }
+
+    private func attachmentButton(_ attachment: CodexImageAttachment) -> some View {
+        let fileName = attachment.displayFileName ?? String(localized: "Image")
+        return Button {
+            HapticFeedback.shared.triggerImpactFeedback(style: .light)
+            if let image = AttachmentPreviewImageResolver.resolve(attachment) {
+                previewImage = PreviewImagePayload(image: image, title: fileName)
+            } else {
+                previewErrorText = attachment.isElidedHistoryPlaceholder
+                    ? String(localized: "This attachment needs a bridge update and a chat reload before it can be viewed.")
+                    : String(localized: "No preview data is available for this attachment.")
+                isPreviewUnavailable = true
+            }
+        } label: {
+            TimelineImageThumbnail(image: UserAttachmentThumbnailCache.image(for: attachment))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(fileName)
+    }
+
+    static func workspaceReference(for attachment: CodexImageAttachment, cwd: String?) -> AssistantMarkdownImageReference? {
+        guard let source = attachment.sourceURL, let url = URL(string: source) else { return nil }
+        let path = CodexImageAttachment.isHistoryImageReference(source) ? source : RemoteHostPath.linkDestination(url)
+        guard let path else { return nil }
+        let reference = AssistantMarkdownImageReference(path: path, altText: "", occurrenceIndex: 0)
+        return reference.canPreview(currentWorkingDirectory: cwd) ? reference : nil
     }
 }
 

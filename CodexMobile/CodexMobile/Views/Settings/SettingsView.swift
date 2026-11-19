@@ -273,6 +273,9 @@ private struct SettingsUsageCard: View {
                     action: refreshStatus
                 )
             )
+            if let credits = codex.accountUsageCredits {
+                SettingsValueRow(title: String(localized: "Credit balance"), value: credits.displayBalance)
+            }
         }
         .task {
             await refreshStatusIfNeeded()
@@ -319,6 +322,8 @@ private struct SettingsUsageCard: View {
 
 private struct SettingsAppearanceCard: View {
     @Binding var appFontStyle: AppFont.Style
+    @AppStorage(AppFont.Size.storageKey) private var appFontSize: AppFont.Size = .standard
+    @AppStorage(ConversationLayout.storageKey) private var conversationLayout: ConversationLayout = .standard
     @AppStorage(GlassPreference.storageKey) private var useLiquidGlass = true
     @AppStorage(UserBubbleColor.storageKey) private var userBubbleColorRawValue = UserBubbleColor.defaultStoredRawValue
     private let settingsAccentColor = Color.primary
@@ -347,6 +352,20 @@ private struct SettingsAppearanceCard: View {
                     SettingsMenuPickerOption(value: style, title: style.title)
                 },
                 selection: $appFontStyle
+            )
+
+            SettingsMenuPickerRow(
+                title: String(localized: "Font Size"),
+                value: appFontSize.title,
+                options: AppFont.Size.allCases.map { SettingsMenuPickerOption(value: $0, title: $0.title) },
+                selection: $appFontSize
+            )
+
+            SettingsMenuPickerRow(
+                title: String(localized: "Conversation Layout"),
+                value: conversationLayout.title,
+                options: ConversationLayout.allCases.map { SettingsMenuPickerOption(value: $0, title: $0.title) },
+                selection: $conversationLayout
             )
 
             HStack {

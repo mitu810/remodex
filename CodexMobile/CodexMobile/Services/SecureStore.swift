@@ -137,6 +137,17 @@ enum SecureStore {
         SecItemAdd(query as CFDictionary, nil)
     }
 
+    // Reconnect may run in the background, but the identity must stay on this device.
+    nonisolated static func addPairingIdentityIfAbsent(_ value: Data) throws {
+        var query = baseQuery(for: CodexSecureKeys.phoneIdentityState)
+        query[kSecValueData as String] = value
+        query[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        let status = SecItemAdd(query as CFDictionary, nil)
+        guard status == errSecSuccess || status == errSecDuplicateItem else {
+            throw NSError(domain: NSOSStatusErrorDomain, code: Int(status))
+        }
+    }
+
     // Convenience wrapper for small Codable payloads kept in Keychain.
     nonisolated static func readCodable<Value: Decodable>(_ type: Value.Type, for key: String) -> Value? {
         guard let data = readData(for: key) else {

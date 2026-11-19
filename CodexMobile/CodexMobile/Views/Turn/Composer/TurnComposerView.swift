@@ -111,16 +111,16 @@ struct TurnComposerView: View {
     // One text line of the composer font; keeps the resting capsule height
     // stable regardless of async UITextView measurements while still scaling
     // with Dynamic Type so large accessibility sizes don't clip the placeholder.
-    @ScaledMetric(relativeTo: .body) private var collapsedInputHeight: CGFloat = 22
+    @ScaledMetric(relativeTo: .body) private var baseCollapsedInputHeight: CGFloat = 22
+    @AppStorage(AppFont.Size.storageKey) private var appFontSize: AppFont.Size = .standard
+    @AppStorage(ConversationLayout.storageKey) private var conversationLayout: ConversationLayout = .standard
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
 
-    // Square hit target for the resting capsule's "+", mic, and send/stop
-    // controls. The extra 2pt keeps the closed capsule comfortable to tap.
-    private let collapsedControlTapTarget: CGFloat = 34
+    private var collapsedInputHeight: CGFloat { ceil(baseCollapsedInputHeight * appFontSize.scale) }
+    private var collapsedControlTapTarget: CGFloat { conversationLayout.collapsedControlSize }
     // Extra inset applied to the resting capsule (and the accessory row above
     // it, so the two stay flush) on top of the composer's own 12pt margins.
     private static let collapsedComposerInset: CGFloat = 24
-    private let expandedPlainTextMaxVisibleLines: CGFloat = 6
-    private let expandedAccessoryTextMaxVisibleLines: CGFloat = 4
 
     @State private var composerInputHeight: CGFloat = 32
     @State private var inputChangeTask: Task<Void, Never>?
@@ -267,7 +267,7 @@ struct TurnComposerView: View {
                 // capsule begins editing immediately (keyboard and morph animate
                 // together), and losing focus dismisses the keyboard in the same
                 // motion as the collapse.
-                HStack(alignment: .center, spacing: 8) {
+                HStack(alignment: .center, spacing: showsCollapsedComposer && conversationLayout == .spacious ? 3 : 8) {
                     if showsCollapsedComposer {
                         ComposerAttachmentMenu(
                             isPlanModeArmed: isPlanModeArmed,
@@ -322,7 +322,7 @@ struct TurnComposerView: View {
                         // Collapsed: a fixed single-line box so the (empty) input
                         // centers exactly like the old capsule and never resizes
                         // from async height measurements. Expanded: measured height.
-                        .frame(height: showsCollapsedComposer ? collapsedInputHeight : max(composerInputHeight, 34))
+                        .frame(height: showsCollapsedComposer ? collapsedInputHeight : expandedInputHeight)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     // Focus only from taps on the text area itself, so the inline
@@ -348,7 +348,8 @@ struct TurnComposerView: View {
                             ComposerStopControl(
                                 activeTurnID: activeTurnID,
                                 isSending: isSending,
-                                onStopTurn: onStopTurn
+                                onStopTurn: onStopTurn,
+                                diameter: conversationLayout.expandedControlSize ?? 32
                             )
                             .transition(.opacity)
                         }
@@ -411,6 +412,7 @@ struct TurnComposerView: View {
 
     private var expandedBottomBar: some View {
         ComposerBottomBar(
+            layout: conversationLayout,
             runtimeLabelParts: runtimeLabelParts,
             runtimeState: runtimeState,
             runtimeActions: runtimeActions,
@@ -498,9 +500,15 @@ struct TurnComposerView: View {
     // switch the text field to internal scrolling sooner to keep the whole
     // composer card above the keyboard in compact draft screens.
     private var expandedInputMaxVisibleLines: CGFloat {
-        accessoryState.hasTopAccessoryContent
-            ? expandedAccessoryTextMaxVisibleLines
-            : expandedPlainTextMaxVisibleLines
+        let hasAccessories = accessoryState.hasTopAccessoryContent
+        if verticalSizeClass == .compact && conversationLayout == .spacious {
+            return hasAccessories ? 3 : 4
+        }
+        return conversationLayout.maxVisibleLines(hasAccessories: hasAccessories)
+    }
+
+    private var expandedInputHeight: CGFloat {
+        max(composerInputHeight, conversationLayout.minimumExpandedInputHeight)
     }
 
     // Collapsed: half the resting height (6pt padding + content + 6pt padding)

@@ -95,6 +95,7 @@ extension CodexService {
             threadId: threadId,
             turnId: turnId,
             text: text,
+            attachments: decodeImageAttachments(from: paramsObject),
             itemId: itemId,
             createdAt: createdAt
         )
@@ -438,6 +439,7 @@ private extension CodexService {
             threadId: threadId,
             turnId: turnId,
             text: text,
+            attachments: decodeImageAttachments(from: itemObject),
             itemId: itemObject["id"]?.stringValue,
             createdAt: decodeHistoryTimestamp(from: paramsObject)
         )

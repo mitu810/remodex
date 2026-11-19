@@ -23,19 +23,19 @@ enum CodexServiceError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .invalidServerURL(let value):
-            return "Invalid server URL: \(value)"
+            return String(localized: "Invalid server URL: \(value)")
         case .invalidInput(let reason):
             return reason
         case .invalidResponse(let reason):
             return reason
         case .encodingFailed:
-            return "Unable to encode JSON-RPC payload"
+            return String(localized: "Unable to encode JSON-RPC payload")
         case .disconnected:
-            return "WebSocket not connected"
+            return String(localized: "WebSocket not connected")
         case .noPendingApproval:
-            return "No pending approval request"
+            return String(localized: "No pending approval request")
         case .rpcError(let rpcError):
-            return "RPC error \(rpcError.code): \(rpcError.message)"
+            return String(localized: "RPC error \(rpcError.code): \(rpcError.message)")
         }
     }
 }

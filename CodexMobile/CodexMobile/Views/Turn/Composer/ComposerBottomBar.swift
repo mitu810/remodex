@@ -13,6 +13,7 @@ struct ComposerBottomBar: View {
     @Environment(\.colorScheme) private var colorScheme
 
     // Data
+    let layout: ConversationLayout
     let runtimeLabelParts: TurnComposerRuntimeLabelParts
     let runtimeState: TurnComposerRuntimeState
     let runtimeActions: TurnComposerRuntimeActions
@@ -48,12 +49,12 @@ struct ComposerBottomBar: View {
 
     // MARK: - Constants
 
-    private let composerCircleDiameter: CGFloat = 32
+    private var composerCircleDiameter: CGFloat { layout.expandedControlSize ?? 32 }
     private let composerActionIconSize: CGFloat = 14
     // Send stays the primary CTA, so give it a slightly larger tap target than
     // the neutral composer chrome.
     // Keep the send circle two points larger than its previous 32pt size.
-    private let sendButtonDiameter: CGFloat = 34
+    private var sendButtonDiameter: CGFloat { layout.expandedControlSize ?? 34 }
 
     @AppStorage(UserBubbleColor.storageKey) private var userBubbleColorRawValue = UserBubbleColor.defaultStoredRawValue
 
@@ -82,9 +83,7 @@ struct ComposerBottomBar: View {
     // MARK: - Body
 
     var body: some View {
-        // 10pt base spacing + each control's own edge padding lands every
-        // visual gap (ring/pill, pill/mic, mic/stop-send) at ~14pt.
-        HStack(spacing: 10) {
+        HStack(spacing: layout == .spacious ? 2 : 10) {
             ComposerAttachmentMenu(
                 isPlanModeArmed: isPlanModeArmed,
                 runtimeState: runtimeState,
@@ -95,27 +94,21 @@ struct ComposerBottomBar: View {
                 isInteractionLocked: isComposerInteractionLocked,
                 onSetPlanModeArmed: onSetPlanModeArmed,
                 onTapAddImage: onTapAddImage,
-                onTapTakePhoto: onTapTakePhoto
+                onTapTakePhoto: onTapTakePhoto,
+                tapTargetSide: layout.expandedControlSize
             )
-            .padding(.leading, 6)
+            .padding(.leading, layout == .spacious ? 0 : 6)
             if allowsRuntimeSelection {
                 ComposerAccessModeControl(
                     selectedAccessMode: selectedAccessMode,
                     isInteractionLocked: isComposerInteractionLocked,
-                    onSelect: onSelectAccessMode
+                    onSelect: onSelectAccessMode,
+                    controlSize: layout.expandedControlSize ?? 32
                 )
             }
             Spacer(minLength: 0)
 
-            // Ring + runtime pill travel together on the trailing side; the
-            // tight inner spacing keeps the ring visually attached to the
-            // model/effort block instead of floating in the Spacer gap.
-            HStack(spacing: 4) {
-                if allowsRuntimeSelection {
-                    inlineStatusControl
-                }
-                runtimeMenuControl
-            }
+            runtimeControls
 
             if isQueuePaused && queuedCount > 0 {
                 Button {
@@ -128,13 +121,20 @@ struct ComposerBottomBar: View {
                         background: Color(.systemGray2),
                         diameter: 28
                     )
+                    .frame(
+                        width: layout.expandedControlSize,
+                        height: layout.expandedControlSize
+                    )
+                    .contentShape(Rectangle())
                 }
                 .accessibilityLabel("Resume queued messages")
             }
 
             ComposerVoiceButton(
                 presentation: voiceButtonPresentation,
-                onTap: onTapVoice
+                onTap: onTapVoice,
+                iconSide: layout == .spacious ? 24 : 21,
+                tapTargetSide: layout.expandedControlSize
             )
 
             if showsStopButton {
@@ -147,7 +147,7 @@ struct ComposerBottomBar: View {
                 )
                 // Match the send button's extra leading air so the mic never
                 // sits flush against the filled stop circle.
-                .padding(.leading, 4)
+                .padding(.leading, layout == .spacious ? 0 : 4)
             }
 
             if showsSendButton {
@@ -163,13 +163,21 @@ struct ComposerBottomBar: View {
                             .offset(x: 8, y: -8)
                     }
                 }
-                .padding(.leading, 4)
+                .padding(.leading, layout == .spacious ? 0 : 4)
                 .disabled(isSendDisabled)
             }
         }
         .padding(.horizontal, 8)
         .padding(.bottom, 4)
-        .padding(.top, 0)
+    }
+
+    private var runtimeControls: some View {
+        HStack(spacing: 4) {
+            if allowsRuntimeSelection {
+                inlineStatusControl
+            }
+            runtimeMenuControl
+        }
     }
 
     // Single SF `arrow.up.circle.fill` glyph (palette-rendered) so the arrow and
@@ -190,6 +198,7 @@ struct ComposerBottomBar: View {
         ComposerRuntimePill(
             labelParts: runtimeLabelParts,
             showsFastModeBadge: allowsRuntimeSelection && runtimeState.showsFastModeBadgeOnPill,
+            minimumHeight: layout.expandedControlSize,
             onTap: onTapRuntimePill
         )
         .equatable()
@@ -205,8 +214,6 @@ struct ComposerBottomBar: View {
             shouldAutoRefreshStatus: shouldAutoRefreshUsageStatus,
             showsGlassBackground: false,
             progressColorOverride: .primary,
-            // Slimmer tap target than the standalone default so the ring's
-            // internal air matches the ~12pt visual rhythm of the bar.
             tapTargetSize: 28,
             onRefreshStatus: onRefreshUsageStatus
         )
@@ -234,8 +241,11 @@ struct ComposerBottomBar: View {
 // it renders precomputed label parts and reports taps, while the slider
 // overlay and all-models sheet are presented by TurnComposerView.
 private struct ComposerRuntimePill: View, Equatable {
+    @AppStorage(AppFont.Size.storageKey) private var appFontSize: AppFont.Size = .standard
+
     let labelParts: TurnComposerRuntimeLabelParts
     let showsFastModeBadge: Bool
+    let minimumHeight: CGFloat?
     let onTap: () -> Void
 
     private let metaLabelColor = Color(.secondaryLabel)
@@ -246,9 +256,11 @@ private struct ComposerRuntimePill: View, Equatable {
     static func == (lhs: ComposerRuntimePill, rhs: ComposerRuntimePill) -> Bool {
         lhs.labelParts == rhs.labelParts
             && lhs.showsFastModeBadge == rhs.showsFastModeBadge
+            && lhs.minimumHeight == rhs.minimumHeight
     }
 
     var body: some View {
+        let _ = appFontSize
         Button {
             HapticFeedback.shared.triggerImpactFeedback(style: .light)
             onTap()
@@ -294,6 +306,7 @@ private struct ComposerRuntimePill: View, Equatable {
         }
         .padding(.vertical, 6)
         .padding(.horizontal, 4)
+        .frame(minHeight: minimumHeight)
         .contentShape(Rectangle())
     }
 

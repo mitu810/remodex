@@ -12,6 +12,7 @@ struct TurnComposerInputTextView: UIViewRepresentable {
     static let textContainerInset = UIEdgeInsets(top: 3, left: 0, bottom: 5, right: 0)
 
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @AppStorage(AppFont.Size.storageKey) private var appFontSize: AppFont.Size = .standard
     @AppStorage(UserBubbleColor.storageKey)
     private var userBubbleColorRawValue = UserBubbleColor.defaultStoredRawValue
     @Binding var text: String
@@ -149,8 +150,9 @@ struct TurnComposerInputTextView: UIViewRepresentable {
     // Keeps the composer aligned with the app's normal body sizing instead of
     // the smaller ad hoc size that made the input feel visually detached.
     private func composerUIFont() -> UIFont {
-        // Read the SwiftUI environment so UIKit gets refreshed when Dynamic Type changes.
+        // Refresh the UIKit font when either text size preference changes.
         let _ = dynamicTypeSize
+        let _ = appFontSize
         return AppFont.bodyUIFont()
     }
 

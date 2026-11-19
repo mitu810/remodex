@@ -95,6 +95,12 @@ struct TurnTimelineView<EmptyState: View, Composer: View>: View {
     @State private var localEarlierRevealTask: Task<Void, Never>?
     @State private var scrollGeometryCoalescer = ScrollGeometryCoalescer()
     @State private var nativeScrollController = TurnTimelineNativeScrollController()
+    @State private var earlierHistoryAnchor: EarlierHistoryAnchor?
+
+    private struct EarlierHistoryAnchor {
+        let firstMessageID: String
+        let origin: TurnTimelineNativeScrollController.HistoryAnchorOrigin
+    }
 
     /// The service supplies paginated render windows; legacy full-history threads still slice locally.
     private var visibleMessages: ArraySlice<CodexMessage> {
@@ -354,6 +360,8 @@ struct TurnTimelineView<EmptyState: View, Composer: View>: View {
                             planMatchingFingerprint: planMatchingFingerprint,
                             newestStreamingMessageID: renderCacheState.newestStreamingMessageID,
                             autoScrollMode: autoScrollMode,
+                            historyAnchorItemID: earlierHistoryAnchor?.origin.itemID ?? historyAnchorCandidateID,
+                            onHistoryAnchorOriginChanged: handleHistoryAnchorOriginChanged,
                             onRetryUserMessage: onRetryUserMessage,
                             onTapAssistantRevert: onTapAssistantRevert,
                             onTapSubagent: onTapSubagent,
@@ -656,6 +664,12 @@ struct TurnTimelineView<EmptyState: View, Composer: View>: View {
         }
 
         // Loading older history is explicit user ownership of the viewport.
+        earlierHistoryAnchor = nil
+        if let firstMessageID = visibleMessages.first?.id,
+           let origin = nativeScrollController.historyAnchorOrigin,
+           origin.itemID == historyAnchorCandidateID {
+            earlierHistoryAnchor = EarlierHistoryAnchor(firstMessageID: firstMessageID, origin: origin)
+        }
         isAwaitingAssistantResponse = false
         transitionScrollOwnership(.loadEarlier)
         progressiveTailRevealTask?.cancel()
@@ -671,9 +685,7 @@ struct TurnTimelineView<EmptyState: View, Composer: View>: View {
             let pageSize = historyPageSize.messageCount
             onRevealEarlierMessages(pageSize)
             if !usesPaginatedHistory {
-                withAnimation(.easeOut(duration: 0.15)) {
-                    visibleTailCount = min(visibleTailCount + pageSize, messages.count + pageSize)
-                }
+                visibleTailCount = min(visibleTailCount + pageSize, messages.count + pageSize)
             }
             scheduleLocalEarlierRevealCompletion()
             return
@@ -700,6 +712,26 @@ struct TurnTimelineView<EmptyState: View, Composer: View>: View {
         }
     }
 
+    private var historyAnchorCandidateID: String? {
+        // Plain message identities remain stable when neighbouring tool rows are regrouped.
+        let items = visibleRenderItems
+        let firstMessage = items.first { item in
+            if case .message = item { return true }
+            return false
+        }
+        return firstMessage?.id ?? items.first?.id
+    }
+
+    private func handleHistoryAnchorOriginChanged(_ origin: TurnTimelineNativeScrollController.HistoryAnchorOrigin) {
+        nativeScrollController.recordHistoryAnchorOrigin(origin)
+        guard let anchor = earlierHistoryAnchor,
+              origin.itemID == anchor.origin.itemID,
+              visibleMessages.first?.id != anchor.firstMessageID,
+              visibleMessages.contains(where: { $0.id == anchor.firstMessageID }) else { return }
+        earlierHistoryAnchor = nil
+        nativeScrollController.restoreAfterPrepending(from: anchor.origin, to: origin)
+    }
+
     // Debounces the top button so a single tap cannot consume many local pages before SwiftUI lays out.
     private func scheduleLocalEarlierRevealCompletion() {
         let expectedThreadID = threadID
@@ -715,6 +747,7 @@ struct TurnTimelineView<EmptyState: View, Composer: View>: View {
     }
 
     private func handleScrollToLatestButtonTap(using proxy: ScrollViewProxy) {
+        earlierHistoryAnchor = nil
         HapticFeedback.shared.triggerImpactFeedback(style: .light)
         nativeScrollController.cancelUserMomentum()
         isAwaitingAssistantResponse = false
@@ -765,6 +798,7 @@ struct TurnTimelineView<EmptyState: View, Composer: View>: View {
 
     // Cancels any delayed scroll work so old thread sessions cannot move the new one.
     private func cancelScrollTasks() {
+        earlierHistoryAnchor = nil
         scrollGeometryCoalescer.cancel()
         progressiveTailRevealTask?.cancel()
         progressiveTailRevealTask = nil
@@ -869,6 +903,7 @@ struct TurnTimelineView<EmptyState: View, Composer: View>: View {
 
     private func handleOlderHistoryErrorChange(_ newValue: String?) {
         if newValue != nil {
+            earlierHistoryAnchor = nil
             pendingRemoteEarlierLoadMessageCount = nil
         }
     }
@@ -1265,6 +1300,7 @@ struct TurnTimelineView<EmptyState: View, Composer: View>: View {
     // completion-held single-flight path above.
     private func scrollToBottom(using proxy: ScrollViewProxy) {
         guard !messages.isEmpty else { return }
+        earlierHistoryAnchor = nil
         proxy.scrollTo(scrollBottomAnchorID, anchor: .bottom)
     }
 

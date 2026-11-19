@@ -5,7 +5,7 @@
 
 import Foundation
 
-struct CodexRateLimitWindow: Equatable, Sendable {
+struct CodexRateLimitWindow: Codable, Equatable, Sendable {
     let usedPercent: Int
     let windowDurationMins: Int?
     let resetsAt: Date?
@@ -25,7 +25,7 @@ struct CodexRateLimitDisplayRow: Identifiable, Equatable, Sendable {
     let window: CodexRateLimitWindow
 }
 
-struct CodexRateLimitBucket: Identifiable, Equatable, Sendable {
+struct CodexRateLimitBucket: Codable, Identifiable, Equatable, Sendable {
     let limitId: String
     let limitName: String?
     let primary: CodexRateLimitWindow?
@@ -135,7 +135,7 @@ struct CodexRateLimitBucket: Identifiable, Equatable, Sendable {
         let dayMinutes = 24 * 60
 
         if minutes % weekMinutes == 0 {
-            return minutes == weekMinutes ? "Weekly" : "\(minutes / weekMinutes)w"
+            return minutes == weekMinutes ? String(localized: "Weekly") : "\(minutes / weekMinutes)w"
         }
 
         if minutes % dayMinutes == 0 {

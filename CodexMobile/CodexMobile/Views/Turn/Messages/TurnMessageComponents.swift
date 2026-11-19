@@ -112,12 +112,14 @@ private struct MessageRowAttachmentSignature: Equatable {
     let thumbnailFingerprint: CodexTextContentFingerprint
     let payloadFingerprint: CodexTextContentFingerprint?
     let sourceFingerprint: CodexTextContentFingerprint?
+    let fileName: String?
 
     init(_ attachment: CodexImageAttachment) {
         self.id = attachment.id
         self.thumbnailFingerprint = attachment.thumbnailContentFingerprint
         self.payloadFingerprint = attachment.payloadContentFingerprint
         self.sourceFingerprint = attachment.sourceContentFingerprint
+        self.fileName = attachment.fileName
     }
 }
 
@@ -374,7 +376,6 @@ struct MessageRow: View, Equatable {
     @State private var assistantDisplayUpdateTask: Task<Void, Never>?
     @State private var assistantDisplaySyncTask: Task<Void, Never>?
     @State private var textExpansionLevel = 0
-    @State private var previewImage: PreviewImagePayload?
 
     static func == (lhs: MessageRow, rhs: MessageRow) -> Bool {
         MessageRowMessageSignature(lhs.message) == MessageRowMessageSignature(rhs.message)
@@ -483,12 +484,6 @@ struct MessageRow: View, Equatable {
         .sheet(item: $selectableTextSheet) { sheet in
             SelectableMessageTextSheet(state: sheet)
         }
-        .fullScreenCover(item: $previewImage) { payload in
-            ZoomableImagePreviewScreen(
-                payload: payload,
-                onDismiss: { previewImage = nil }
-            )
-        }
         // No .clipped() here: it cut the selection handle grabbers at the row edges.
         // The timeline container already clips the rows section at viewport width.
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -524,7 +519,8 @@ struct MessageRow: View, Equatable {
             actionText: hasUnresolvedNativeAsyncReply ? visibleText : actionText,
             isProgressiveTextWindow: isProgressiveTextWindow && !hasUnresolvedNativeAsyncReply,
             isRetryAvailable: isRetryAvailable && message.kind != .asyncUserInputAnswer,
-            onRetryUserMessage: onRetryUserMessage
+            onRetryUserMessage: onRetryUserMessage,
+            currentWorkingDirectory: currentWorkingDirectory
         )
     }
 
@@ -584,9 +580,8 @@ struct MessageRow: View, Equatable {
         let assistantInlineContentSegments = usesCachedAssistantImageContent
             ? renderModel.assistantInlineContentSegments
             : []
-        let trailingAssistantImageReferences = assistantImageReferences.filter {
-            !$0.isTemporaryScreenshotImage
-                && $0.canPreview(currentWorkingDirectory: currentWorkingDirectory)
+        let previewableImageReferences = assistantImageReferences.filter {
+            $0.canPreview(currentWorkingDirectory: currentWorkingDirectory)
         }
         let visibleAssistantTextWithoutImageSyntax = assistantImageReferences.isEmpty
             ? visibleAssistantText
@@ -596,16 +591,19 @@ struct MessageRow: View, Equatable {
         let hasVisibleAssistantText = !trimmedVisibleAssistantText.isEmpty
         let assistantImageAttachments = message.isStreaming
             ? []
-            : message.attachments.filter(\.hasPreviewPayload)
-        let rendersTemporaryImagesInline = !assistantInlineContentSegments.isEmpty
+            : message.attachments.filter {
+                $0.hasPreviewPayload || UserAttachmentStrip.workspaceReference(for: $0, cwd: currentWorkingDirectory) != nil
+            }
+        let rendersImagesInline = !previewableImageReferences.isEmpty && !assistantInlineContentSegments.isEmpty
             && !message.isStreaming
             && mermaidContent == nil
             && proposedPlan == nil
             && inferredQuestionnaire == nil
+        let trailingAssistantImageReferences = rendersImagesInline ? [] : previewableImageReferences
         let hasRenderableAssistantContent = hasVisibleAssistantText
             || proposedPlan != nil
             || !trailingAssistantImageReferences.isEmpty
-            || rendersTemporaryImagesInline
+            || rendersImagesInline
             || !assistantImageAttachments.isEmpty
         // Copy the full underlying text even when the rendered row is clipped.
         // Image-only artifact rows still avoid a duplicate copy affordance.
@@ -660,7 +658,7 @@ struct MessageRow: View, Equatable {
                         isStreaming: message.isStreaming,
                         canImplement: assistantTurnCompleted
                     )
-                } else if rendersTemporaryImagesInline {
+                } else if rendersImagesInline {
                     ForEach(assistantInlineContentSegments) { segment in
                         switch segment {
                         case .text(_, let segmentText):
@@ -708,11 +706,11 @@ struct MessageRow: View, Equatable {
                 }
 
                 if !assistantImageAttachments.isEmpty {
-                    UserAttachmentStrip(attachments: assistantImageAttachments) { tappedAttachment in
-                        if let image = AttachmentPreviewImageResolver.resolve(tappedAttachment) {
-                            previewImage = PreviewImagePayload(image: image)
-                        }
-                    }
+                    UserAttachmentStrip(
+                        attachments: assistantImageAttachments,
+                        currentWorkingDirectory: currentWorkingDirectory,
+                        alignment: .leading
+                    )
                     .padding(.top, trailingAssistantImageReferences.isEmpty ? 0 : 4)
                 }
             }

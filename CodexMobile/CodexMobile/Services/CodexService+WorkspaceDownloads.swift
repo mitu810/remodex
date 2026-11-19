@@ -25,6 +25,36 @@ private struct WorkspaceFileChunk {
     let data: Data
 }
 
+enum WorkspaceFileError {
+    static func downloadReason(forPreviewFailure failure: RPCError) -> String? {
+        switch code(failure) {
+        case "file_too_large":
+            return String(localized: "This file is too large to preview. Download the original to Files.")
+        case "binary_file", "unsupported_text_encoding":
+            return String(localized: "This file cannot be previewed as text. Download the original to Files.")
+        default:
+            return nil
+        }
+    }
+
+    static func displayMessage(for failure: RPCError) -> String {
+        switch code(failure) {
+        case "file_not_found", "image_not_found":
+            return String(localized: "The file is no longer available on the paired device.")
+        case "file_path_not_allowed":
+            return String(localized: "Only files in the current workspace can be viewed.")
+        case "history_image_unavailable":
+            return String(localized: "Reopen the chat to reload this image, then tap it again.")
+        default:
+            return NSLocalizedString(failure.message, comment: "Workspace file operation error")
+        }
+    }
+
+    private static func code(_ failure: RPCError) -> String? {
+        failure.data?.objectValue?["errorCode"]?.stringValue
+    }
+}
+
 extension CodexService {
     func downloadWorkspaceFile(
         path: String,
@@ -92,7 +122,7 @@ extension CodexService {
             if failure.data?.objectValue?["errorCode"]?.stringValue == "unknown_method" || failure.code == -32601 {
                 throw CodexServiceError.invalidResponse(String(localized: "Update the bridge on this device to download files."))
             }
-            throw CodexServiceError.invalidResponse(NSLocalizedString(failure.message, comment: "Workspace file download error"))
+            throw CodexServiceError.invalidResponse(WorkspaceFileError.displayMessage(for: failure))
         }
 
         guard let result = response.result?.objectValue, result["offset"]?.intValue == offset,

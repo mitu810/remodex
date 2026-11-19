@@ -23,7 +23,8 @@ struct StreamingAssistantMarkdownTextView: View {
     @AppStorage(UserBubbleColor.storageKey)
     private var userBubbleColorRawValue = UserBubbleColor.defaultStoredRawValue
     // Tracks Dynamic Type so the reproduced inter-block seam spacing scales with the body font.
-    @ScaledMetric(relativeTo: .body) private var bodyFontSize: CGFloat = 15
+    @AppStorage(AppFont.Size.storageKey) private var appFontSize: AppFont.Size = .standard
+    @ScaledMetric(relativeTo: .body) private var bodyFontSize: CGFloat = AppFont.bodyPointSize
 
     // The message is split into a stable "settled" prefix (every closed block) and the
     // single "active" trailing block that is still streaming. Settled is rendered once and
@@ -142,7 +143,7 @@ struct StreamingAssistantMarkdownTextView: View {
     // active block (max of the adjacent edges), since each StructuredText drops edge spacing.
     // Reads cached multipliers, so this stays O(1) on the per-character render path.
     private var seamSpacing: CGFloat {
-        max(seamTopMultiplier, seamBottomMultiplier) * bodyFontSize
+        max(seamTopMultiplier, seamBottomMultiplier) * bodyFontSize * appFontSize.scale
     }
 
     // Picks between the fully-styled active value and a frontier-faded copy. The revision keys

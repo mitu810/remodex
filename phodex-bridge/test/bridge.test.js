@@ -1980,7 +1980,7 @@ test("sanitizeLiveUserNotification filters fallback context and rewrites visible
   });
   assert.deepEqual(mixedItem.params.item.content, [
     { type: "input_text", text: "keep me" },
-    { type: "input_image", image_url: "data:image/png;base64,AAAA" },
+    { type: "input_image", url: "remodex://history-image-elided" },
   ]);
 });
 
@@ -2097,6 +2097,31 @@ test("sanitizeThreadHistoryImagesForRelay sanitizes mixed user content entry-by-
     { type: "input_text", text: "Review this file" },
     { type: "input_image", url: "remodex://history-image-elided" },
   ]);
+});
+
+test("a conversation image stays in its history item and can be read on demand", async () => {
+  const { handleWorkspaceMethod } = require("../src/workspace-handler");
+  const data = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aIioAAAAASUVORK5CYII=";
+  const image = { type: "input_image", filename: "图片.png", image_url: { url: `data:image/png;base64,${data}` } };
+  const user = { type: "user_message", id: "prompt-with-image", content: [
+    { type: "input_text", text: "Look at the photo" }, image,
+  ] };
+  const raw = JSON.stringify({ id: 1, result: { thread: { id: "fixture", turns: [{ id: "turn", items: [user] }] } } });
+  const sanitized = sanitizeThreadHistoryImagesForRelay(raw, "thread/read");
+  assert.ok(!sanitized.includes(data));
+  const [text, attachment] = JSON.parse(sanitized).result.thread.turns[0].items[0].content;
+  assert.equal(text.text, "Look at the photo");
+  assert.match(attachment.url, /^remodex:\/\/history-image\/[a-f0-9]{64}\//);
+
+  const live = sanitizeLiveUserNotification({ method: "item/completed", params: { item: user } });
+  assert.equal(live.params.item.content[1].url, attachment.url);
+  const result = await handleWorkspaceMethod("workspace/readImage", { path: attachment.url, maxPixelDimension: 1600 });
+  assert.equal(result.fileName, "图片.png");
+  assert.equal(result.dataBase64, data);
+  assert.equal(result.mimeType, "image/png");
+  await assert.rejects(() => handleWorkspaceMethod("workspace/readImage", {
+    path: `remodex://history-image/${"0".repeat(64)}/arbitrary.png`,
+  }), (error) => error.errorCode === "history_image_unavailable");
 });
 
 test("sanitizeThreadHistoryImagesForRelay replaces inline history images with lightweight references", () => {

@@ -11,6 +11,19 @@ extension CodexService {
         decodeRateLimitBuckets(from: payload).sorted { $0.sortDurationMins < $1.sortDurationMins }
     }
 
+    func decodeAccountUsageCredits(from payload: IncomingParamsObject) -> CodexAccountUsageCredits? {
+        let keyed = (payload["rateLimitsByLimitId"] ?? payload["rate_limits_by_limit_id"])?.objectValue
+        let aggregate = (payload["rateLimits"] ?? payload["rate_limits"])?.objectValue
+        guard let credits = keyed?["codex"]?.objectValue?["credits"]?.objectValue
+            ?? aggregate?["credits"]?.objectValue
+            ?? payload["credits"]?.objectValue else { return nil }
+        let balance = credits["balance"]
+        return CodexAccountUsageCredits(
+            creditsBalance: balance?.stringValue ?? balance?.doubleValue.map { String($0) },
+            unlimited: credits["unlimited"]?.boolValue == true
+        )
+    }
+
     // Refreshes the shared usage surfaces with thread context (when available) plus account rate limits.
     func refreshUsageStatus(threadId: String?) async {
         if let normalizedThreadID = normalizedUsageStatusThreadID(threadId) {
@@ -63,11 +76,15 @@ extension CodexService {
 
     // Fetches the latest ChatGPT rate-limit buckets for the local status sheet.
     func refreshRateLimits() async {
+        guard isConnected, !isLoadingRateLimits else { return }
+        let deviceID = secureSession?.macDeviceId
+        let epoch = lastAppliedBridgeReplayEpoch
         isLoadingRateLimits = true
         defer { isLoadingRateLimits = false }
 
         do {
             let response = try await fetchRateLimitsWithCompatRetry()
+            guard isConnected, secureSession?.macDeviceId == deviceID, lastAppliedBridgeReplayEpoch == epoch else { return }
             guard let resultObject = response.result?.objectValue else {
                 throw CodexServiceError.invalidResponse("account/rateLimits/read response missing payload")
             }
@@ -76,8 +93,7 @@ extension CodexService {
             hasResolvedRateLimitsSnapshot = true
             rateLimitsErrorMessage = nil
         } catch {
-            hasResolvedRateLimitsSnapshot = false
-            rateLimitBuckets = []
+            guard !Task.isCancelled, isConnected, secureSession?.macDeviceId == deviceID, lastAppliedBridgeReplayEpoch == epoch else { return }
             let message = error.localizedDescription.trimmingCharacters(in: .whitespacesAndNewlines)
             rateLimitsErrorMessage = message.isEmpty ? "Unable to load rate limits" : message
         }
@@ -111,14 +127,14 @@ private extension CodexService {
     // Retries the account RPC with both accepted explicit-param shapes because runtimes disagree.
     func fetchRateLimitsWithCompatRetry() async throws -> RPCMessage {
         do {
-            return try await sendRequest(method: "account/rateLimits/read", params: .null)
+            return try await sendRequest(method: "account/rateLimits/read", params: .null, timeoutNanoseconds: 15_000_000_000)
         } catch {
             guard shouldRetryRateLimitsWithEmptyParams(error) else {
                 throw error
             }
         }
 
-        return try await sendRequest(method: "account/rateLimits/read", params: .object([:]))
+        return try await sendRequest(method: "account/rateLimits/read", params: .object([:]), timeoutNanoseconds: 15_000_000_000)
     }
 
     // Decodes both full read responses and partial realtime updates into display buckets.
@@ -130,6 +146,11 @@ private extension CodexService {
         let resolvedBuckets = mergeWithExisting
             ? mergeRateLimitBuckets(existing: rateLimitBuckets, incoming: decodedBuckets)
             : decodedBuckets
+        if let credits = decodeAccountUsageCredits(from: payloadObject) {
+            accountUsageCredits = credits
+        } else if !mergeWithExisting {
+            accountUsageCredits = nil
+        }
 
         rateLimitBuckets = resolvedBuckets.sorted { lhs, rhs in
             if lhs.sortDurationMins == rhs.sortDurationMins {
@@ -140,6 +161,23 @@ private extension CodexService {
     }
 
     func decodeRateLimitBuckets(from payloadObject: IncomingParamsObject) -> [CodexRateLimitBucket] {
+        if payloadObject["rate_limit"] != nil || payloadObject["additional_rate_limits"] != nil {
+            var buckets: [CodexRateLimitBucket] = []
+            if let value = payloadObject["rate_limit"],
+               let bucket = decodeRateLimitBucket(limitId: "codex", value: value) {
+                buckets.append(bucket)
+            }
+            let additionalLimits = payloadObject["additional_rate_limits"]?.arrayValue ?? []
+            for limit in additionalLimits {
+                guard let object = limit.objectValue, var details = object["rate_limit"]?.objectValue else { continue }
+                details["limit_name"] = object["limit_name"]
+                if let bucket = decodeRateLimitBucket(limitId: object["metered_feature"]?.stringValue, value: .object(details)) {
+                    buckets.append(bucket)
+                }
+            }
+            return buckets
+        }
+
         if let keyedBuckets = payloadObject["rateLimitsByLimitId"]?.objectValue
             ?? payloadObject["rate_limits_by_limit_id"]?.objectValue {
             return keyedBuckets.compactMap { limitId, value in
@@ -222,11 +260,15 @@ private extension CodexService {
     func decodeRateLimitWindow(value: JSONValue?) -> CodexRateLimitWindow? {
         guard let object = value?.objectValue else { return nil }
 
-        let usedPercent = firstIntValue(in: object, keys: ["usedPercent", "used_percent"]) ?? 0
+        let percent = object["usedPercent"] ?? object["used_percent"]
+        guard let rawPercent = percent?.doubleValue ?? percent?.stringValue.flatMap(Double.init), rawPercent.isFinite else {
+            return nil
+        }
+        let usedPercent = Int(min(max(rawPercent, 0), 100).rounded())
         let windowDurationMins = firstIntValue(
             in: object,
             keys: ["windowDurationMins", "window_duration_mins", "windowMinutes", "window_minutes"]
-        )
+        ) ?? firstIntValue(in: object, keys: ["limit_window_seconds"]).map { $0 / 60 }
 
         let resetDate: Date?
         if let rawResetsAt = object["resetsAt"]?.doubleValue

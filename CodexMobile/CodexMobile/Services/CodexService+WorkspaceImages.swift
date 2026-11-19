@@ -193,7 +193,11 @@ extension CodexService {
             params["cwd"] = .string(cwd)
         }
 
-        let response = try await sendRequest(method: "workspace/readImage", params: .object(params))
+        let response = try await sendRequest(
+            method: "workspace/readImage",
+            params: .object(params),
+            expectedSecureDeviceID: secureSession?.macDeviceId
+        )
         guard let result = response.result?.objectValue else {
             throw CodexServiceError.invalidResponse("Image preview response was missing a result.")
         }

@@ -334,7 +334,10 @@ private struct TurnTimelinePreviousMessagesView: View {
     @State private var isExpanded = false
 
     private var title: String {
-        group.hiddenCount == 1 ? "1 previous message" : "\(group.hiddenCount) previous messages"
+        if group.hiddenCount == 1 {
+            return String(localized: "1 previous message")
+        }
+        return String(localized: "\(group.hiddenCount) previous messages")
     }
 
     var body: some View {
@@ -358,7 +361,9 @@ private struct TurnTimelinePreviousMessagesView: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel(title)
-            .accessibilityHint(isExpanded ? "Collapse previous messages" : "Expand previous messages")
+            .accessibilityHint(isExpanded
+                ? String(localized: "Collapse previous messages")
+                : String(localized: "Expand previous messages"))
 
             if isExpanded {
                 ForEach(group.messages) { message in
@@ -412,12 +417,15 @@ struct TurnTimelineRowsSection: View {
     let planMatchingFingerprint: Int
     let newestStreamingMessageID: String?
     let autoScrollMode: TurnScrollOwnership
+    let historyAnchorItemID: String?
+    let onHistoryAnchorOriginChanged: (TurnTimelineNativeScrollController.HistoryAnchorOrigin) -> Void
     let onRetryUserMessage: (String) -> Void
     let onTapAssistantRevert: (CodexMessage) -> Void
     let onTapSubagent: (CodexSubagentThreadPresentation) -> Void
     let onLoadEarlierMessages: () -> Void
     let pendingStreamingAssistantPlaceholderID: String?
 
+    private static let historyContentCoordinateSpace = "turn-timeline-history-content"
     private static let runningIndicatorRowID = "turn-timeline-running-indicator-row"
 
     var body: some View {
@@ -452,81 +460,20 @@ struct TurnTimelineRowsSection: View {
             }
 
             ForEach(renderItems) { item in
-                switch item {
-                case .message(let message):
-                    TurnTimelineMessageRow(
-                        message: message,
-                        isRetryAvailable: isRetryAvailable,
-                        cachedBlockInfoByMessageID: cachedBlockInfoByMessageID,
-                        planSessionSource: planSessionSource,
-                        allowsAssistantPlanFallbackRecovery: allowsAssistantPlanFallbackRecovery,
-                        completedTurnIDs: completedTurnIDs,
-                        threadMessagesForPlanMatching: threadMessagesForPlanMatching,
-                        currentWorkingDirectory: currentWorkingDirectory,
-                        planMatchingFingerprint: planMatchingFingerprint,
-                        newestStreamingMessageID: newestStreamingMessageID,
-                        autoScrollMode: autoScrollMode,
-                        showsGlobalRunningIndicator: shouldUseGlobalRunningIndicator,
-                        movesCopyAndRunningToGroupFooter: false,
-                        onRetryUserMessage: onRetryUserMessage,
-                        onTapAssistantRevert: onTapAssistantRevert,
-                        onTapSubagent: onTapSubagent
-                    )
-                case .toolBurst(let group):
-                    TurnTimelineToolBurstView(
-                        group: group,
-                        isRetryAvailable: isRetryAvailable,
-                        cachedBlockInfoByMessageID: cachedBlockInfoByMessageID,
-                        planSessionSource: planSessionSource,
-                        allowsAssistantPlanFallbackRecovery: allowsAssistantPlanFallbackRecovery,
-                        completedTurnIDs: completedTurnIDs,
-                        threadMessagesForPlanMatching: threadMessagesForPlanMatching,
-                        currentWorkingDirectory: currentWorkingDirectory,
-                        planMatchingFingerprint: planMatchingFingerprint,
-                        newestStreamingMessageID: newestStreamingMessageID,
-                        autoScrollMode: autoScrollMode,
-                        showsGlobalRunningIndicator: shouldUseGlobalRunningIndicator,
-                        onRetryUserMessage: onRetryUserMessage,
-                        onTapAssistantRevert: onTapAssistantRevert,
-                        onTapSubagent: onTapSubagent
-                    )
-                case .commandGroup(let group):
-                    TurnTimelineCommandGroupView(
-                        group: group,
-                        isRetryAvailable: isRetryAvailable,
-                        cachedBlockInfoByMessageID: cachedBlockInfoByMessageID,
-                        planSessionSource: planSessionSource,
-                        allowsAssistantPlanFallbackRecovery: allowsAssistantPlanFallbackRecovery,
-                        completedTurnIDs: completedTurnIDs,
-                        threadMessagesForPlanMatching: threadMessagesForPlanMatching,
-                        currentWorkingDirectory: currentWorkingDirectory,
-                        planMatchingFingerprint: planMatchingFingerprint,
-                        newestStreamingMessageID: newestStreamingMessageID,
-                        autoScrollMode: autoScrollMode,
-                        showsGlobalRunningIndicator: shouldUseGlobalRunningIndicator,
-                        onRetryUserMessage: onRetryUserMessage,
-                        onTapAssistantRevert: onTapAssistantRevert,
-                        onTapSubagent: onTapSubagent
-                    )
-                case .previousMessages(let group):
-                    TurnTimelinePreviousMessagesView(
-                        group: group,
-                        isRetryAvailable: isRetryAvailable,
-                        cachedBlockInfoByMessageID: cachedBlockInfoByMessageID,
-                        planSessionSource: planSessionSource,
-                        allowsAssistantPlanFallbackRecovery: allowsAssistantPlanFallbackRecovery,
-                        completedTurnIDs: completedTurnIDs,
-                        threadMessagesForPlanMatching: threadMessagesForPlanMatching,
-                        currentWorkingDirectory: currentWorkingDirectory,
-                        planMatchingFingerprint: planMatchingFingerprint,
-                        newestStreamingMessageID: newestStreamingMessageID,
-                        autoScrollMode: autoScrollMode,
-                        showsGlobalRunningIndicator: shouldUseGlobalRunningIndicator,
-                        onRetryUserMessage: onRetryUserMessage,
-                        onTapAssistantRevert: onTapAssistantRevert,
-                        onTapSubagent: onTapSubagent
-                    )
-                }
+                timelineRow(item)
+                    .background {
+                        if item.id == historyAnchorItemID {
+                            Color.clear
+                                .onGeometryChange(for: TurnTimelineNativeScrollController.HistoryAnchorOrigin.self) { geometry in
+                                    TurnTimelineNativeScrollController.HistoryAnchorOrigin(
+                                        itemID: item.id,
+                                        y: geometry.frame(in: .named(Self.historyContentCoordinateSpace)).minY
+                                    )
+                                } action: { origin in
+                                    onHistoryAnchorOriginChanged(origin)
+                                }
+                        }
+                    }
             }
 
             if showsGlobalRunningIndicator {
@@ -541,7 +488,87 @@ struct TurnTimelineRowsSection: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         // One selection scope for the whole timeline: starting a selection in any
         // markdown row clears the active selection in every other row.
+        .coordinateSpace(name: Self.historyContentCoordinateSpace)
         .remodex.textSelectionScope()
+    }
+
+    @ViewBuilder
+    private func timelineRow(_ item: TurnTimelineRenderItem) -> some View {
+        switch item {
+        case .message(let message):
+            TurnTimelineMessageRow(
+                message: message,
+                isRetryAvailable: isRetryAvailable,
+                cachedBlockInfoByMessageID: cachedBlockInfoByMessageID,
+                planSessionSource: planSessionSource,
+                allowsAssistantPlanFallbackRecovery: allowsAssistantPlanFallbackRecovery,
+                completedTurnIDs: completedTurnIDs,
+                threadMessagesForPlanMatching: threadMessagesForPlanMatching,
+                currentWorkingDirectory: currentWorkingDirectory,
+                planMatchingFingerprint: planMatchingFingerprint,
+                newestStreamingMessageID: newestStreamingMessageID,
+                autoScrollMode: autoScrollMode,
+                showsGlobalRunningIndicator: shouldUseGlobalRunningIndicator,
+                movesCopyAndRunningToGroupFooter: false,
+                onRetryUserMessage: onRetryUserMessage,
+                onTapAssistantRevert: onTapAssistantRevert,
+                onTapSubagent: onTapSubagent
+            )
+        case .toolBurst(let group):
+            TurnTimelineToolBurstView(
+                group: group,
+                isRetryAvailable: isRetryAvailable,
+                cachedBlockInfoByMessageID: cachedBlockInfoByMessageID,
+                planSessionSource: planSessionSource,
+                allowsAssistantPlanFallbackRecovery: allowsAssistantPlanFallbackRecovery,
+                completedTurnIDs: completedTurnIDs,
+                threadMessagesForPlanMatching: threadMessagesForPlanMatching,
+                currentWorkingDirectory: currentWorkingDirectory,
+                planMatchingFingerprint: planMatchingFingerprint,
+                newestStreamingMessageID: newestStreamingMessageID,
+                autoScrollMode: autoScrollMode,
+                showsGlobalRunningIndicator: shouldUseGlobalRunningIndicator,
+                onRetryUserMessage: onRetryUserMessage,
+                onTapAssistantRevert: onTapAssistantRevert,
+                onTapSubagent: onTapSubagent
+            )
+        case .commandGroup(let group):
+            TurnTimelineCommandGroupView(
+                group: group,
+                isRetryAvailable: isRetryAvailable,
+                cachedBlockInfoByMessageID: cachedBlockInfoByMessageID,
+                planSessionSource: planSessionSource,
+                allowsAssistantPlanFallbackRecovery: allowsAssistantPlanFallbackRecovery,
+                completedTurnIDs: completedTurnIDs,
+                threadMessagesForPlanMatching: threadMessagesForPlanMatching,
+                currentWorkingDirectory: currentWorkingDirectory,
+                planMatchingFingerprint: planMatchingFingerprint,
+                newestStreamingMessageID: newestStreamingMessageID,
+                autoScrollMode: autoScrollMode,
+                showsGlobalRunningIndicator: shouldUseGlobalRunningIndicator,
+                onRetryUserMessage: onRetryUserMessage,
+                onTapAssistantRevert: onTapAssistantRevert,
+                onTapSubagent: onTapSubagent
+            )
+        case .previousMessages(let group):
+            TurnTimelinePreviousMessagesView(
+                group: group,
+                isRetryAvailable: isRetryAvailable,
+                cachedBlockInfoByMessageID: cachedBlockInfoByMessageID,
+                planSessionSource: planSessionSource,
+                allowsAssistantPlanFallbackRecovery: allowsAssistantPlanFallbackRecovery,
+                completedTurnIDs: completedTurnIDs,
+                threadMessagesForPlanMatching: threadMessagesForPlanMatching,
+                currentWorkingDirectory: currentWorkingDirectory,
+                planMatchingFingerprint: planMatchingFingerprint,
+                newestStreamingMessageID: newestStreamingMessageID,
+                autoScrollMode: autoScrollMode,
+                showsGlobalRunningIndicator: shouldUseGlobalRunningIndicator,
+                onRetryUserMessage: onRetryUserMessage,
+                onTapAssistantRevert: onTapAssistantRevert,
+                onTapSubagent: onTapSubagent
+            )
+        }
     }
 
     private var shouldUseGlobalRunningIndicator: Bool {

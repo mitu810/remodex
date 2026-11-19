@@ -12,6 +12,7 @@ const {
   resolveSessionsRoot,
 } = require("./rollout-watch");
 const { resolveCodexGeneratedImagesRoot } = require("./codex-home");
+const { isConversationImageContentItem, sanitizeInlineHistoryImageContentItem } = require("./history-image");
 const { buildApplyPatchFileChangeItem } = require("./apply-patch-changes");
 const {
   expandExecWrapperToolCall,
@@ -1240,7 +1241,10 @@ function userMessageNotifications(state, entry, payload, {
   rawMessage = "",
   isResponseItem = false,
 } = {}) {
-  const imagePlaceholder = responseItemHasUserImage(payload) ? "Image attachment" : "";
+  const content = Array.isArray(payload?.content)
+    ? payload.content.filter(isConversationImageContentItem).map(sanitizeInlineHistoryImageContentItem)
+    : [];
+  const imagePlaceholder = content.length ? "Image attachment" : "";
   const message = visibleUserPromptFromInputEntries(
     rawMessage || readString(payload?.message) || readString(payload?.text) || imagePlaceholder
   );
@@ -1254,14 +1258,17 @@ function userMessageNotifications(state, entry, payload, {
     // response_item(user) can precede task_started. Hold it exactly like the
     // event_msg form so task_started flushes the opener before thinking/output.
     const pendingKey = `${itemId || ""}:${message}`;
-    if (!state.pendingUserMessages.some((pending) => `${pending.id || ""}:${pending.message}` === pendingKey)) {
-      state.pendingUserMessages.push({ id: itemId, message, timestamp, isResponseItem });
+    const pending = state.pendingUserMessages.find((message) => `${message.id || ""}:${message.message}` === pendingKey);
+    if (!pending) {
+      state.pendingUserMessages.push({ id: itemId, message, timestamp, isResponseItem, content });
+    } else if (content.length) {
+      pending.content = content;
     }
     return [];
   }
 
   const dedupeKey = userMessageOccurrenceKey(state, turnId, message, { isResponseItem });
-  if (state.emittedUserMessageKeys.has(dedupeKey)) {
+  if (state.emittedUserMessageKeys.has(dedupeKey) && !content.length) {
     return [];
   }
   state.emittedUserMessageKeys.add(dedupeKey);
@@ -1269,6 +1276,7 @@ function userMessageNotifications(state, entry, payload, {
     threadId: state.threadId,
     turnId,
     message,
+    ...(content.length ? { content } : {}),
     ...(itemId ? { id: itemId } : {}),
     ...timestampParams(timestamp),
   })];
@@ -1308,10 +1316,7 @@ function userMessageOccurrenceKey(state, turnId, message, { isResponseItem = fal
 }
 
 function responseItemHasUserImage(payload) {
-  return Array.isArray(payload?.content) && payload.content.some((part) => {
-    const type = readString(part?.type).toLowerCase();
-    return type === "input_image" || type === "image" || type === "image_url";
-  });
+  return Array.isArray(payload?.content) && payload.content.some(isConversationImageContentItem);
 }
 
 function agentMessageNotifications(state, entry, payload) {
@@ -2095,7 +2100,7 @@ function flushPendingUserMessageNotifications(state, turnId) {
       const dedupeKey = userMessageOccurrenceKey(state, resolvedTurnId, pending.message, {
         isResponseItem: pending.isResponseItem === true,
       });
-      if (state.emittedUserMessageKeys.has(dedupeKey)) {
+      if (state.emittedUserMessageKeys.has(dedupeKey) && !pending.content?.length) {
         return false;
       }
       state.emittedUserMessageKeys.add(dedupeKey);
@@ -2107,6 +2112,7 @@ function flushPendingUserMessageNotifications(state, turnId) {
       // dedup against the turn-bound row of the same prompt; omit it instead.
       ...(resolvedTurnId ? { turnId: resolvedTurnId } : {}),
       message: pending.message,
+      ...(pending.content?.length ? { content: pending.content } : {}),
       ...(pending.id ? { id: pending.id } : {}),
       ...timestampParams(pending.timestamp),
     }));

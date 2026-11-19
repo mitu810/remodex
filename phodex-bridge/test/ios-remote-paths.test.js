@@ -18,7 +18,7 @@ test("iOS routes threads and labels projects using paths from the paired host", 
   const end = turns.indexOf("struct ThreadCatalogSnapshot", start);
   assert.ok(start >= 0 && end > start);
   const preview = fs.readFileSync(path.join(mobile, "Views/Turn/Messages/WorkspaceImagePreview.swift"), "utf8");
-  const links = preview.indexOf("fileprivate enum WorkspaceLinkedFilePreviewKind");
+  const links = preview.indexOf("enum WorkspaceFileLinkResolver {");
   const view = preview.indexOf("private struct WorkspacePreviewChromeButton:", links);
   assert.ok(links >= 0 && view > links);
   const downloads = fs.readFileSync(path.join(mobile, "Services/CodexService+WorkspaceDownloads.swift"), "utf8");

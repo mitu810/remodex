@@ -50,6 +50,30 @@ function credentialFingerprint(raw) {
   return identity ? fingerprint(...JSON.parse(identity)) : null;
 }
 
+// Keeps recent rotations recoverable if the encrypted reply is lost on reconnect.
+// The original content is keyed by a hash. Nothing is written to disk or logged.
+function createCredentialCheckRecovery({ now = Date.now, ttlMs = 60 * 60 * 1000 } = {}) {
+  const entries = new Map();
+  const key = (credential) => createHash("sha256").update(credential).digest("hex");
+  return {
+    read(credential) {
+      const id = key(credential);
+      const entry = entries.get(id);
+      if (!entry) return null;
+      if (entry.expiresAt > now()) return entry.result;
+      entries.delete(id);
+      return null;
+    },
+    remember(credential, result) {
+      if (!result?.credential || result.credential === credential) return;
+      const time = now();
+      for (const [id, entry] of entries) if (entry.expiresAt <= time) entries.delete(id);
+      if (entries.size >= 32) entries.delete(entries.keys().next().value);
+      entries.set(key(credential), { expiresAt: time + ttlMs, result });
+    },
+  };
+}
+
 // Read the identity from Codex's live account rather than trusting the auth.json on disk.
 function activeCredentialFingerprint(account, authStatus) {
   if (!isChatGPTAuthMethod(authStatus?.authMethod || account?.account?.type)) return null;
@@ -122,7 +146,19 @@ async function queryCredential(raw, { renew, appPath, env = process.env, createT
       !/^(CODEX_HOME|OPENAI_API_KEY|CODEX_API_KEY|CODEX_ACCESS_TOKEN|OPENAI_BASE_URL|CODEX_BASE_URL)$/i.test(key)));
     transport = createTransport({ appPath, env: { ...isolatedEnv, CODEX_HOME: home } });
     closed = new Promise((resolve) => transport.onClose(resolve));
-    const read = await runAccountCheck(transport, renew, closed);
+    let read;
+    try {
+      read = await runAccountCheck(transport, renew, closed);
+    } catch (error) {
+      // Codex can have already persisted the rotated auth before its next RPC fails.
+      try {
+        const recovered = readInstalledCredential(home);
+        if (recovered && recovered !== raw && credentialIdentity(recovered) === credentialIdentity(raw)) {
+          return { credential: recovered, usageUnavailable: true };
+        }
+      } catch {}
+      throw error;
+    }
     const current = readInstalledCredential(home);
     if (current && current !== raw && credentialIdentity(current) === credentialIdentity(raw)) read.credential = current;
     if (renew && !read.credential) read.renewalFailed = true;
@@ -198,5 +234,5 @@ function runAccountCheck(transport, renew, closed) {
 
 module.exports = {
   accountError, activeCredentialFingerprint, credentialFingerprint, credentialIdentity,
-  queryCredential, readInstalledCredential, replaceCodexCredential,
+  createCredentialCheckRecovery, queryCredential, readInstalledCredential, replaceCodexCredential,
 };
