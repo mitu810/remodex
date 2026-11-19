@@ -13,6 +13,7 @@ struct MyDeviceRowModel: Identifiable {
     let secondaryName: String?
     let status: String
     let detail: String?
+    let credentialLabel: String?
     let isCurrent: Bool
     let isConnected: Bool
     let isSwitching: Bool
@@ -39,7 +40,7 @@ enum MyDevicesPresentation {
 
     static func compactDisplayName(_ rawName: String) -> String {
         let trimmed = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return "Device" }
+        guard !trimmed.isEmpty else { return String(localized: "Device") }
 
         if trimmed.lowercased().hasSuffix(".local") {
             return String(trimmed.dropLast(6))
@@ -54,15 +55,20 @@ enum MyDevicesPresentation {
     }
 
     static func rowModels(from codex: CodexService, switchingDeviceId: String?) -> [MyDeviceRowModel] {
-        sortedRecords(from: codex).map { record in
-            rowModel(for: record, codex: codex, switchingDeviceId: switchingDeviceId)
+        let profiles = (try? CodexCredentialVault.load()) ?? []
+        let titles = Dictionary(profiles.compactMap { profile in
+            profile.fingerprint.map { ($0, profile.title) }
+        }, uniquingKeysWith: { first, _ in first })
+        return sortedRecords(from: codex).map { record in
+            rowModel(for: record, codex: codex, switchingDeviceId: switchingDeviceId, credentialTitles: titles)
         }
     }
 
     static func rowModel(
         for trustedMac: CodexTrustedMacRecord,
         codex: CodexService,
-        switchingDeviceId: String?
+        switchingDeviceId: String?,
+        credentialTitles: [String: String]? = nil
     ) -> MyDeviceRowModel {
         let identity = displayIdentity(for: trustedMac)
         return MyDeviceRowModel(
@@ -71,11 +77,26 @@ enum MyDevicesPresentation {
             secondaryName: identity.secondaryName,
             status: statusLabel(for: trustedMac, codex: codex, switchingDeviceId: switchingDeviceId),
             detail: detailLabel(for: trustedMac, switchingDeviceId: switchingDeviceId),
+            credentialLabel: credentialTitles.map { credentialLabel(for: trustedMac.macDeviceId, codex: codex, titles: $0) },
             isCurrent: trustedMac.macDeviceId == codex.normalizedCurrentTrustedMacDeviceId,
             isConnected: trustedMac.macDeviceId == codex.normalizedRelayMacDeviceId && codex.isConnected,
             isSwitching: trustedMac.macDeviceId == switchingDeviceId,
             isVisibleInMenu: MyDeviceMenuVisibilityStore.isVisible(trustedMac.macDeviceId)
         )
+    }
+
+    private static func credentialLabel(for deviceID: String, codex: CodexService, titles: [String: String]) -> String {
+        if codex.managedCredentialRestartingDeviceIDs.contains(deviceID) {
+            return String(localized: "Switching Codex account…")
+        }
+        guard let fingerprint = codex.managedCredentialStatusByDeviceID[deviceID] else {
+            return String(localized: "Codex account unverified")
+        }
+        let isLive = codex.isConnected && codex.liveManagedCredentialDeviceID == deviceID
+        if let title = titles[fingerprint] {
+            return isLive ? String(localized: "Codex account: \(title)") : String(localized: "Last confirmed account: \(title)")
+        }
+        return isLive ? String(localized: "No matching saved account") : String(localized: "Codex account unverified")
     }
 
     private static func displayIdentity(for trustedMac: CodexTrustedMacRecord) -> (primaryName: String, secondaryName: String?) {
@@ -104,18 +125,18 @@ enum MyDevicesPresentation {
         switchingDeviceId: String?
     ) -> String {
         if trustedMac.macDeviceId == switchingDeviceId {
-            return "Switching"
+            return String(localized: "Switching")
         }
         if trustedMac.macDeviceId == codex.normalizedRelayMacDeviceId && codex.isConnected {
-            return "Connected"
+            return String(localized: "Connected")
         }
         if trustedMac.macDeviceId == codex.normalizedCurrentTrustedMacDeviceId {
-            return "Selected"
+            return String(localized: "Selected")
         }
         if trustedMac.macDeviceId == codex.normalizedPreviousTrustedMacDeviceId {
-            return "Previous"
+            return String(localized: "Previous")
         }
-        return "Saved"
+        return String(localized: "Saved")
     }
 
     private static func detailLabel(
@@ -123,7 +144,7 @@ enum MyDevicesPresentation {
         switchingDeviceId: String?
     ) -> String? {
         if trustedMac.macDeviceId == switchingDeviceId {
-            return "Reloading chats"
+            return String(localized: "Reloading chats")
         }
 
         let formatter = RelativeDateTimeFormatter()

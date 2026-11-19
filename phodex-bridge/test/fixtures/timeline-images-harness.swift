@@ -46,6 +46,19 @@ enum FileChangeBlockPresentationBuilder {
         let final = CodexMessage(id: "final", assistantPhase: "final_answer", text: "Done.")
         let codeExample = TurnTimelineRenderProjection.project(messages: [user, literal, final], completedTurnIDs: ["turn"])
         precondition(!codeExample.contains { $0.id == "literal" }, "code examples must not become image cards")
+        let drive = #"C:\work\项目 X"#
+        let unc = #"\\host\share\项目 X"#
+        for root in [drive, unc] {
+            let relative = #"art\图.png"#
+            let reference = AssistantMarkdownImageReference(path: relative, altText: "", occurrenceIndex: 0)
+            precondition(reference.canPreview(currentWorkingDirectory: root), "relative image on a Windows host")
+            let joined = CommandOutputImageReferenceParser.firstReference(command: "", outputTail: relative, cwd: root)
+            precondition(joined?.path == root + #"\art\图.png"#, "host-native image path")
+            for outside in [#"..\other\图.png"#, #"D:\work\图.png"#, #"\\other\share\图.png"#] {
+                let image = AssistantMarkdownImageReference(path: outside, altText: "", occurrenceIndex: 0)
+                precondition(!image.canPreview(currentWorkingDirectory: root), "cross-root image")
+            }
+        }
         print("timeline image visibility checks passed")
     }
 }

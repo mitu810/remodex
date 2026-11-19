@@ -115,7 +115,7 @@ struct AsyncUserInputCardView: View {
             Button("Review answers") { onRetry() }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Remodex cannot tell if Codex received them. Check the chat on your Mac first: sending them again could create a duplicate.")
+            Text("Remodex cannot tell if Codex received them. Check the chat on your computer first: sending them again could create a duplicate.")
         }
     }
 

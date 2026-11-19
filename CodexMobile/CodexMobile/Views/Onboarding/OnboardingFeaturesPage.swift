@@ -28,31 +28,31 @@ struct OnboardingFeaturesPage: View {
                     featureRow(
                         icon: "hare.fill",
                         color: .yellow,
-                        title: "Fast mode",
-                        subtitle: "Lower-latency turns for quick interactions"
+                        title: String(localized: "Fast mode"),
+                        subtitle: String(localized: "Lower-latency turns for quick interactions")
                     )
                     featureRow(
                         icon: "arrow.triangle.branch",
                         color: .green,
-                        title: "Git from your phone",
-                        subtitle: "Commit, push, pull, and switch branches"
+                        title: String(localized: "Git from your phone"),
+                        subtitle: String(localized: "Commit, push, pull, and switch branches")
                     )
                     featureRow(
                         icon: "lock.shield.fill",
                         color: .cyan,
-                        title: "End-to-end encrypted",
-                        subtitle: "The relay never sees your prompts or code"
+                        title: String(localized: "End-to-end encrypted"),
+                        subtitle: String(localized: "The relay never sees your prompts or code")
                     )
                     featureRow(
                         icon: "waveform",
                         color: .purple,
-                        title: "Voice mode",
-                        subtitle: "Talk to Codex with speech-to-text"
+                        title: String(localized: "Voice mode"),
+                        subtitle: String(localized: "Talk to Codex with speech-to-text")
                     )
                     featureRow(
                         icon: "point.3.connected.trianglepath.dotted",
                         color: .orange,
-                        title: "Subagents, skills and /commands",
+                        title: String(localized: "Subagents, skills and /commands"),
                         subtitle: "Spawn and monitor parallel agents from your phone"
                     )
                 }

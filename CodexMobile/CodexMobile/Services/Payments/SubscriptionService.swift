@@ -81,6 +81,7 @@ final class SubscriptionService {
     private static let freeSendCountDefaultsKey = "codex.subscription.freeSendCount"
     private static let freeSendLimit = 5
 
+    let isBillingEnabled = AppEnvironment.revenueCatPublicAPIKey != nil
     private let defaults: UserDefaults
     @ObservationIgnored private let customerInfoUpdatesTaskStore = CustomerInfoUpdatesTaskStore()
     private var isBootstrapping = false
@@ -102,6 +103,10 @@ final class SubscriptionService {
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
+        guard isBillingEnabled else {
+            bootstrapState = .ready
+            return
+        }
         restoreCachedStateIfAvailable()
         startCustomerInfoObserverIfConfigured()
     }
@@ -119,12 +124,12 @@ final class SubscriptionService {
     }
 
     var hasAppAccess: Bool {
-        hasProAccess || hasFreeSendAccess
+        !isBillingEnabled || hasProAccess || hasFreeSendAccess
     }
 
     // Counts a valid send attempt for free users even if the turn later fails.
     func consumeFreeSendAttemptIfNeeded() {
-        guard !hasProAccess, freeSendCount < Self.freeSendLimit else {
+        guard isBillingEnabled, !hasProAccess, freeSendCount < Self.freeSendLimit else {
             return
         }
 
@@ -134,7 +139,7 @@ final class SubscriptionService {
 
     // Bootstraps subscription state once at launch or from the recovery retry action.
     func bootstrap() async {
-        guard !isBootstrapping else {
+        guard isBillingEnabled, !isBootstrapping else {
             return
         }
 
@@ -167,7 +172,7 @@ final class SubscriptionService {
 
     // Refreshes the current subscription state without re-entering the blocking bootstrap UI.
     func refreshCustomerInfoSilently() async {
-        guard !isBootstrapping, bootstrapState != .loading else {
+        guard isBillingEnabled, !isBootstrapping, bootstrapState != .loading else {
             return
         }
 

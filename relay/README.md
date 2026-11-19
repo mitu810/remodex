@@ -108,14 +108,14 @@ The trusted-session resolve endpoint is intended for mobile clients that have al
 
 Push is disabled by default. Enable it only when you are ready to wire APNs and the bridge-side `REMODEX_PUSH_SERVICE_URL`, for example with `REMODEX_ENABLE_PUSH_SERVICE=true`.
 
-## Deploy Notes
+## Self-hosting
 
+- For direct public access, run the relay on loopback and set up [WSS on the same host](../Docs/self-hosting.md#public-access-with-wss). Keep the public TLS port reachable and check `/health` from the phone before pairing.
 - Keep the real relay base URL in private config such as `REMODEX_RELAY`, not in committed source.
 - Keep APNs credentials in private env vars or protected files (`REMODEX_APNS_*`).
-- Leave `REMODEX_TRUST_PROXY` unset for direct/self-hosted installs. Set it to `true` only when a trusted reverse proxy is forwarding requests to this relay.
-- When `REMODEX_TRUST_PROXY=true`, configure the proxy to send sanitized client IP headers (`X-Real-Ip` and/or appended `X-Forwarded-For`) instead of passing client-supplied values through unchanged.
+- Set `REMODEX_TRUST_PROXY=true` only when this relay is accessible exclusively through a trusted reverse proxy. Have the proxy overwrite `X-Real-IP` with the client address. Without `X-Real-IP`, the relay uses the first address in `X-Forwarded-For`, which must also come from the proxy.
 - If you expose the relay under a shared-domain prefix such as `/remodex`, have the proxy strip that prefix before forwarding so the Node server still receives `/relay/...` and `/v1/push/...`.
-- The public repo should document the protocol and code, not your real deployed hostname or deploy defaults.
+- Exclude full relay session paths, pairing codes, and credentials from proxy and server logs.
 
 ## Usage
 

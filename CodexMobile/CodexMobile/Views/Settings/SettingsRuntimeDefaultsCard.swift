@@ -14,18 +14,18 @@ struct SettingsRuntimeDefaultsCard: View {
 
     var body: some View {
         SettingsCard(
-            title: "Composer Defaults",
-            footer: "Used for new chats. Git writer model applies to commit messages and PR drafts."
+            title: String(localized: "Composer Defaults"),
+            footer: String(localized: "Used for new chats. Git writer model applies to commit messages and PR drafts.")
         ) {
             SettingsMenuPickerRow(
-                title: "Model",
+                title: String(localized: "Model"),
                 value: runtimeModelTitle,
                 options: runtimeModelPickerOptions,
                 selection: runtimeModelSelection
             )
 
             SettingsMenuPickerRow(
-                title: "Reasoning",
+                title: String(localized: "Reasoning"),
                 value: runtimeReasoningTitle,
                 options: runtimeReasoningPickerOptions,
                 selection: runtimeReasoningSelection,
@@ -34,7 +34,7 @@ struct SettingsRuntimeDefaultsCard: View {
 
             if codex.selectedModelOption()?.serviceTiers.isEmpty == false {
                 SettingsMenuPickerRow(
-                    title: "Speed",
+                    title: String(localized: "Speed"),
                     value: runtimeServiceTierTitle,
                     options: runtimeServiceTierPickerOptions,
                     selection: runtimeServiceTierSelection
@@ -42,14 +42,14 @@ struct SettingsRuntimeDefaultsCard: View {
             }
 
             SettingsMenuPickerRow(
-                title: "Access",
+                title: String(localized: "Access"),
                 value: runtimeAccessTitle,
                 options: runtimeAccessPickerOptions,
                 selection: runtimeAccessSelection
             )
 
             SettingsMenuPickerRow(
-                title: "Git Writer",
+                title: String(localized: "Git Writer"),
                 value: gitWriterModelTitle,
                 options: gitWriterModelPickerOptions,
                 selection: gitWriterModelSelection,
@@ -69,21 +69,21 @@ struct SettingsRuntimeDefaultsCard: View {
     }
 
     private var runtimeModelPickerOptions: [SettingsMenuPickerOption<String>] {
-        [SettingsMenuPickerOption(value: runtimeAutoValue, title: "Auto")]
+        [SettingsMenuPickerOption(value: runtimeAutoValue, title: String(localized: "Auto"))]
             + runtimeModelOptions.map {
                 SettingsMenuPickerOption(value: $0.id, title: TurnComposerMetaMapper.modelTitle(for: $0))
             }
     }
 
     private var runtimeReasoningPickerOptions: [SettingsMenuPickerOption<String>] {
-        [SettingsMenuPickerOption(value: runtimeAutoValue, title: "Auto")]
+        [SettingsMenuPickerOption(value: runtimeAutoValue, title: String(localized: "Auto"))]
             + runtimeReasoningOptions.map {
                 SettingsMenuPickerOption(value: $0.effort, title: $0.title)
             }
     }
 
     private var runtimeServiceTierPickerOptions: [SettingsMenuPickerOption<String>] {
-        [SettingsMenuPickerOption(value: runtimeNormalValue, title: "Normal")]
+        [SettingsMenuPickerOption(value: runtimeNormalValue, title: String(localized: "Normal"))]
             + (codex.selectedModelOption()?.serviceTiers ?? []).map {
                 SettingsMenuPickerOption(value: $0.rawValue, title: $0.displayName)
             }
@@ -104,7 +104,7 @@ struct SettingsRuntimeDefaultsCard: View {
     private var runtimeModelTitle: String {
         guard let selectedModelId = codex.selectedModelOption()?.id,
               let model = runtimeModelOptions.first(where: { $0.id == selectedModelId }) else {
-            return "Auto"
+            return String(localized: "Auto")
         }
         return TurnComposerMetaMapper.modelTitle(for: model)
     }
@@ -112,14 +112,14 @@ struct SettingsRuntimeDefaultsCard: View {
     private var runtimeReasoningTitle: String {
         guard let selectedReasoning = codex.selectedReasoningEffort,
               let option = runtimeReasoningOptions.first(where: { $0.effort == selectedReasoning }) else {
-            return "Auto"
+            return String(localized: "Auto")
         }
         return option.title
     }
 
     private var runtimeServiceTierTitle: String {
         guard let selectedServiceTier = codex.selectedServiceTier else {
-            return "Normal"
+            return String(localized: "Normal")
         }
         return selectedServiceTier.displayName
     }
@@ -131,7 +131,7 @@ struct SettingsRuntimeDefaultsCard: View {
     private var gitWriterModelTitle: String {
         guard let selectedModel = codex.selectedGitWriterModelOption()
             ?? gitWriterModelOptions.first else {
-            return "Unavailable"
+            return String(localized: "Unavailable")
         }
         return TurnComposerMetaMapper.modelTitle(for: selectedModel)
     }

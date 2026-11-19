@@ -11,27 +11,27 @@ private struct SettingsCommandReference: Identifiable {
     static let commands = [
         SettingsCommandReference(
             command: "remodex up",
-            detail: "Starts the bridge and prints a pairing QR for first-time setup."
+            detail: String(localized: "Starts the bridge and prints a pairing QR for first-time setup.")
         ),
         SettingsCommandReference(
             command: "remodex start",
-            detail: "Starts the background bridge without printing a QR."
+            detail: String(localized: "Starts the background bridge without printing a QR.")
         ),
         SettingsCommandReference(
             command: "remodex restart",
-            detail: "Restarts the bridge when the app can't reconnect cleanly."
+            detail: String(localized: "Restarts the bridge when the app can't reconnect cleanly.")
         ),
         SettingsCommandReference(
             command: "remodex qr / pair",
-            detail: "Refreshes the bridge and prints a new pairing QR code."
+            detail: String(localized: "Refreshes the bridge and prints a new pairing QR code.")
         ),
         SettingsCommandReference(
             command: "remodex status",
-            detail: "Shows whether the bridge is loaded and recently paired."
+            detail: String(localized: "Shows whether the bridge is loaded and recently paired.")
         ),
         SettingsCommandReference(
             command: "remodex stop",
-            detail: "Stops the background bridge on your Mac."
+            detail: String(localized: "Stops the background bridge.")
         ),
         SettingsCommandReference(
             command: "remodex reset-pairing",
@@ -39,15 +39,15 @@ private struct SettingsCommandReference: Identifiable {
         ),
         SettingsCommandReference(
             command: "remodex resume",
-            detail: "Reopens the last active Remodex thread in Codex."
+            detail: String(localized: "Reopens the last active Remodex thread in Codex.")
         ),
         SettingsCommandReference(
             command: "remodex watch [threadId]",
-            detail: "Tails a thread event log in real time."
+            detail: String(localized: "Tails a thread event log in real time.")
         ),
         SettingsCommandReference(
             command: "remodex --version",
-            detail: "Prints the installed Remodex CLI version."
+            detail: String(localized: "Prints the installed Remodex CLI version.")
         )
     ]
 
@@ -66,7 +66,7 @@ struct SettingsCommandReferenceSheet: View {
         NavigationStack {
             List {
                 Section {
-                    Text("Run these in Terminal on your paired Mac when you need to start, repair, or inspect the local Remodex bridge.")
+                    Text("Run these in a terminal on your paired computer when you need to start, repair, or inspect the local Remodex bridge.")
                         .font(AppFont.footnote())
                         .foregroundStyle(.secondary)
                 }

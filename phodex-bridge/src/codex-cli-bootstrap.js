@@ -5,6 +5,7 @@
 // Depends on: child_process
 
 const { execFileSync } = require("child_process");
+const { codexCommandOverride, createCliLaunch, resolveCliExecutable } = require("./codex-launch");
 
 const CODEX_PACKAGE_SPEC = "@openai/codex@latest";
 const SKIP_BOOTSTRAP_ENV_NAME = "REMODEX_SKIP_CODEX_BOOTSTRAP";
@@ -14,6 +15,7 @@ function ensureCodexCLI({
   env = process.env,
   platform = process.platform,
   execFileSyncImpl = execFileSync,
+  fsImpl,
   logger = console,
   shouldUpdate = true,
   npmInstallArgs = ["install", "-g", CODEX_PACKAGE_SPEC],
@@ -28,13 +30,7 @@ function ensureCodexCLI({
   }
 
   logInfo(logger, "[remodex] Checking Codex CLI...");
-  const versionBefore = readExecutableVersion({
-    executable: "codex",
-    args: ["--version"],
-    env,
-    platform,
-    execFileSyncImpl,
-  });
+  const versionBefore = readVersion("codex");
 
   if (versionBefore) {
     logInfo(logger, `[remodex] Codex CLI found (${versionBefore}).`);
@@ -42,7 +38,12 @@ function ensureCodexCLI({
     logInfo(logger, "[remodex] Codex CLI not found.");
   }
 
-  if (versionBefore && !shouldUpdate) {
+  const override = codexCommandOverride(env, platform);
+  if (override && !versionBefore) {
+    logWarn(logger, "[remodex] Cannot run REMODEX_CODEX_COMMAND. Check the executable path and permissions.");
+    return { status: "failed", versionBefore: null, versionAfter: null };
+  }
+  if (versionBefore && (!shouldUpdate || override)) {
     return {
       status: "current",
       versionBefore,
@@ -50,13 +51,7 @@ function ensureCodexCLI({
     };
   }
 
-  const npmVersion = readExecutableVersion({
-    executable: "npm",
-    args: ["--version"],
-    env,
-    platform,
-    execFileSyncImpl,
-  });
+  const npmVersion = readVersion("npm");
 
   if (!npmVersion) {
     logWarn(
@@ -74,10 +69,7 @@ function ensureCodexCLI({
   logInfo(logger, `[remodex] ${actionVerb} Codex CLI via npm (${CODEX_PACKAGE_SPEC})...`);
 
   try {
-    execFileSyncImpl(resolveExecutableName("npm", platform), npmInstallArgs, {
-      env,
-      stdio: "inherit",
-    });
+    runCli("npm", npmInstallArgs, { stdio: "inherit" });
   } catch (error) {
     const message = extractCommandFailureMessage(error);
     logWarn(
@@ -91,13 +83,7 @@ function ensureCodexCLI({
     };
   }
 
-  const versionAfter = readExecutableVersion({
-    executable: "codex",
-    args: ["--version"],
-    env,
-    platform,
-    execFileSyncImpl,
-  });
+  const versionAfter = readVersion("codex");
 
   if (!versionAfter) {
     logWarn(
@@ -120,34 +106,25 @@ function ensureCodexCLI({
     versionBefore,
     versionAfter,
   };
+
+  function runCli(name, args, options) {
+    const file = resolveCliExecutable(name, { env, platform, fsImpl });
+    const launch = createCliLaunch(file, args, { ...options, env }, platform);
+    return execFileSyncImpl(launch.command, launch.args, launch.options);
+  }
+
+  function readVersion(name) {
+    try {
+      return parseVersion(runCli(name, ["--version"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }));
+    } catch {
+      return null;
+    }
+  }
 }
 
 function shouldSkipCodexBootstrap(env = process.env) {
   const raw = String(env[SKIP_BOOTSTRAP_ENV_NAME] || "").trim().toLowerCase();
   return raw === "1" || raw === "true" || raw === "yes";
-}
-
-function readExecutableVersion({
-  executable,
-  args,
-  env,
-  platform,
-  execFileSyncImpl,
-}) {
-  try {
-    const output = execFileSyncImpl(resolveExecutableName(executable, platform), args, {
-      encoding: "utf8",
-      env,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    return parseVersion(output);
-  } catch {
-    return null;
-  }
-}
-
-function resolveExecutableName(name, platform = process.platform) {
-  return platform === "win32" ? `${name}.cmd` : name;
 }
 
 function parseVersion(output) {

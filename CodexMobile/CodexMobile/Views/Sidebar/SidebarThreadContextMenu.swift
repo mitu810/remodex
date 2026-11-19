@@ -27,7 +27,7 @@ struct SidebarThreadContextMenu {
 
         if let onCopySessionId {
             children.append(makeAction(
-                title: "Copy sessionId",
+                title: String(localized: "Copy sessionId"),
                 systemImage: "doc.on.doc",
                 handler: onCopySessionId
             ))
@@ -35,7 +35,7 @@ struct SidebarThreadContextMenu {
 
         if let onRename {
             children.append(makeAction(
-                title: "Rename",
+                title: String(localized: "Rename"),
                 systemImage: "pencil",
                 handler: onRename
             ))
@@ -44,7 +44,7 @@ struct SidebarThreadContextMenu {
         if let onArchiveToggle {
             let isArchived = thread.syncState == .archivedLocal
             children.append(makeAction(
-                title: isArchived ? "Unarchive" : "Archive",
+                title: isArchived ? String(localized: "Unarchive") : String(localized: "Archive"),
                 systemImage: isArchived ? "tray.and.arrow.up" : "archivebox",
                 handler: onArchiveToggle
             ))
@@ -52,7 +52,7 @@ struct SidebarThreadContextMenu {
 
         if let onPinToggle, thread.syncState != .archivedLocal, !thread.isSubagent {
             children.append(makeAction(
-                title: isPinned ? "Unpin" : "Pin",
+                title: isPinned ? String(localized: "Unpin") : String(localized: "Pin"),
                 systemImage: isPinned ? "pin.slash" : "pin",
                 handler: onPinToggle
             ))
@@ -60,7 +60,7 @@ struct SidebarThreadContextMenu {
 
         if let onDelete {
             children.append(makeAction(
-                title: "Remove from Phone",
+                title: String(localized: "Remove from Phone"),
                 systemImage: "trash",
                 attributes: .destructive,
                 handler: onDelete

@@ -16,26 +16,26 @@ struct SettingsSubscriptionCard: View {
         SettingsCard(
             title: "Remodex Pro",
             footer: subscriptions.hasProAccess
-                ? "Manage billing through your Apple ID subscription settings."
+                ? String(localized: "Manage billing through your Apple ID subscription settings.")
                 : "Unlock voice mode, unlimited threads, and more."
         ) {
             SettingsValueRow(
-                title: "Plan",
-                value: subscriptions.hasProAccess ? "Active" : "Free",
+                title: String(localized: "Plan"),
+                value: subscriptions.hasProAccess ? String(localized: "Active") : String(localized: "Free"),
                 valueColor: subscriptions.hasProAccess ? .green : .secondary
             )
 
-            SettingsButton(subscriptions.hasProAccess ? "View Pro Benefits" : "Upgrade to Pro") {
+            SettingsButton(subscriptions.hasProAccess ? String(localized: "View Pro Benefits") : String(localized: "Upgrade to Pro")) {
                 onShowPaywall()
             }
 
-            SettingsButton("Redeem Code") {
+            SettingsButton(String(localized: "Redeem Code")) {
                 onRedeemCode()
             }
             .disabled(subscriptions.isPurchasing || subscriptions.isRestoring)
 
             SettingsButton(
-                subscriptions.isRestoring ? "Restoring…" : "Restore Purchases",
+                subscriptions.isRestoring ? String(localized: "Restoring…") : String(localized: "Restore Purchases"),
                 isLoading: subscriptions.isRestoring
             ) {
                 Task {

@@ -6,24 +6,8 @@
 import Foundation
 
 enum TurnWorktreeRouting {
-    // Canonicalizes project paths so worktree handoff/open logic compares the same absolute location.
-    static func canonicalProjectPath(_ rawPath: String) -> String? {
-        guard let normalizedPath = CodexThreadStartProjectBinding.normalizedProjectPath(rawPath) else {
-            return nil
-        }
-
-        return URL(fileURLWithPath: normalizedPath)
-            .resolvingSymlinksInPath()
-            .standardizedFileURL
-            .path
-    }
-
     static func comparableProjectPath(_ rawPath: String?) -> String? {
-        guard let rawPath else {
-            return nil
-        }
-
-        return canonicalProjectPath(rawPath) ?? CodexThreadStartProjectBinding.normalizedProjectPath(rawPath)
+        RemoteHostPath.comparisonPath(rawPath)
     }
 
     // Prefers reopening the live thread already associated with a worktree instead of spawning another one.
@@ -32,9 +16,10 @@ enum TurnWorktreeRouting {
         projectPath: String,
         sort: ([CodexThread]) -> [CodexThread]
     ) -> CodexThread? {
+        guard let target = comparableProjectPath(projectPath) else { return nil }
         let matchingLiveThreads = threads.filter { thread in
             thread.syncState == .live
-                && comparableProjectPath(thread.normalizedProjectPath) == projectPath
+                && comparableProjectPath(thread.normalizedProjectPath) == target
         }
 
         return sort(matchingLiveThreads).first

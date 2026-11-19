@@ -716,17 +716,28 @@ function createBridgeSecureTransport({
   // waiting out a debounce. Sent transiently (no bridgeOutboundSeq, never
   // buffered) so it cannot occupy replay-buffer space or be replayed itself.
   function sendBufferedReplayCompleteMarker(sendWireMessage) {
+    sendTransientApplicationMessage(JSON.stringify({
+      method: "remodex/bufferedReplay/completed",
+      params: { remodexBufferedReplayComplete: true },
+    }), sendWireMessage);
+  }
+
+  function captureTransientApplicationSender() {
+    const session = activeSession;
+    return (payloadText) => {
+      if (session && activeSession === session) {
+        sendTransientApplicationMessage(payloadText, session.sendWireMessage);
+      }
+    };
+  }
+
+  function sendTransientApplicationMessage(payloadText, sendWireMessage) {
     if (!activeSession?.isResumed || typeof sendWireMessage !== "function") {
       return;
     }
 
     const envelope = encryptEnvelopePayload(
-      {
-        payloadText: JSON.stringify({
-          method: "remodex/bufferedReplay/completed",
-          params: { remodexBufferedReplayComplete: true },
-        }),
-      },
+      { payloadText },
       activeSession.macToPhoneKey,
       SECURE_SENDER_MAC,
       activeSession.nextOutboundCounter,
@@ -778,6 +789,7 @@ function createBridgeSecureTransport({
     PAIRING_QR_VERSION,
     SECURE_PROTOCOL_VERSION,
     bindLiveSendWireMessage,
+    captureTransientApplicationSender,
     createPairingPayload,
     handleIncomingWireMessage,
     isSecureChannelReady,

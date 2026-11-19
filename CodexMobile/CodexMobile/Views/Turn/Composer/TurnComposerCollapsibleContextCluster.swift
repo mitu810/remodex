@@ -69,9 +69,9 @@ struct TurnComposerContextClusterFloatingColumn: View {
 
     private var runtimeLabelTitle: String {
         if !hasWorkingDirectory {
-            return "Quick Chat"
+            return String(localized: "Quick Chat")
         }
-        return isWorktreeProject ? "Worktree" : "Local"
+        return isWorktreeProject ? String(localized: "Worktree") : String(localized: "Local")
     }
 
     private var runtimeIconSystemName: String {
@@ -135,9 +135,9 @@ struct TurnComposerContextClusterFloatingColumn: View {
 
     private func buildRuntimeMenu() -> UIMenu {
         let worktreeTitle: String = {
-            if gitState.isCreatingGitWorktree { return "Preparing worktree..." }
-            if isWorktreeProject { return "Hand off to Local" }
-            return isEmptyThread ? "New worktree" : "Hand off to Worktree"
+            if gitState.isCreatingGitWorktree { return String(localized: "Preparing worktree...") }
+            if isWorktreeProject { return String(localized: "Hand off to Local") }
+            return isEmptyThread ? String(localized: "New worktree") : String(localized: "Hand off to Worktree")
         }()
         let worktreeDisabled = !gitState.canHandOffToWorktree
             || gitState.isCreatingGitWorktree
@@ -153,7 +153,7 @@ struct TurnComposerContextClusterFloatingColumn: View {
 
         // Returning to Local is intentionally disabled until it can move code + branch safely.
         let localAction = UIAction(
-            title: "Local",
+            title: String(localized: "Local"),
             image: RemodexIcon.menuUIImage(systemName: "laptopcomputer"),
             attributes: .disabled
         ) { _ in }
@@ -162,7 +162,7 @@ struct TurnComposerContextClusterFloatingColumn: View {
             title: "",
             children: [
                 UIMenu(
-                    title: "Continue in",
+                    title: String(localized: "Continue in"),
                     options: [.displayInline],
                     children: [worktreeAction, localAction]
                 ),

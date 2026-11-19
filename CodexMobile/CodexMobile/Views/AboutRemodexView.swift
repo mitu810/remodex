@@ -104,7 +104,7 @@ struct AboutRemodexView: View {
     private func diagramStep(from: String, to: String, via: String, isLast: Bool = false) -> some View {
         VStack(spacing: 0) {
             HStack(spacing: 10) {
-                Text(from)
+                Text(LocalizedStringKey(from))
                     .font(AppFont.caption(weight: .semibold))
                     .foregroundStyle(.primary)
                     .frame(maxWidth: .infinity, alignment: .trailing)
@@ -113,14 +113,14 @@ struct AboutRemodexView: View {
                     RemodexIcon.image(systemName: "arrow.right")
                         .font(.system(size: 9, weight: .bold))
                         .foregroundStyle(.tertiary)
-                    Text(via)
+                    Text(LocalizedStringKey(via))
                         .font(AppFont.caption2())
                         .foregroundStyle(.secondary)
                         .italic()
                 }
                 .frame(width: 90)
 
-                Text(to)
+                Text(LocalizedStringKey(to))
                     .font(AppFont.caption(weight: .semibold))
                     .foregroundStyle(.primary)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -161,9 +161,9 @@ struct AboutRemodexView: View {
             bodyText("The bridge connects to **Codex** through `codex app-server` and to **OpenCode** through its local server API. Choose a provider and model when starting a chat.")
 
             bulletList([
-                "Chats and files stay with the selected runtime on your Mac",
+                "Chats and files stay with the selected runtime on your computer",
                 "Codex chats appear in Codex.app",
-                "OpenCode chats can continue from OpenCode on the Mac",
+                "OpenCode chats can continue from OpenCode on your computer",
             ])
 
             calloutCard(
@@ -269,7 +269,7 @@ struct AboutRemodexView: View {
         VStack(alignment: .leading, spacing: 14) {
             sectionTitle("Desktop Chats")
 
-            bodyText("Codex chats from your phone are persisted locally and appear in **Codex.app**. OpenCode chats can be continued in OpenCode on the Mac.")
+            bodyText("Codex chats from your phone are saved on your computer. OpenCode chats can be continued in OpenCode on your computer.")
 
             calloutCard(
                 icon: "macbook.and.iphone",
@@ -283,7 +283,7 @@ struct AboutRemodexView: View {
 
     @ViewBuilder
     private func sectionTitle(_ title: String) -> some View {
-        Text(title)
+        Text(LocalizedStringKey(title))
             .font(AppFont.headline(weight: .semibold))
             .foregroundStyle(.primary)
     }
@@ -337,12 +337,12 @@ struct AboutRemodexView: View {
     @ViewBuilder
     private func specRow(_ label: String, _ value: String) -> some View {
         HStack(alignment: .firstTextBaseline) {
-            Text(label)
+            Text(LocalizedStringKey(label))
                 .font(AppFont.caption(weight: .semibold))
                 .foregroundStyle(.secondary)
                 .frame(width: 120, alignment: .leading)
 
-            Text(value)
+            Text(LocalizedStringKey(value))
                 .font(AppFont.mono(.caption))
                 .foregroundStyle(.primary)
         }

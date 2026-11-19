@@ -133,3 +133,72 @@ test("workspace/readFile rejects binary files", async () => {
     /looks binary/
   );
 });
+
+test("workspace/readFileChunk preserves a binary document across bounded reads", async (t) => {
+  const cwd = makeGitWorkspace();
+  t.after(() => fs.rmSync(cwd, { recursive: true, force: true }));
+  const fileName = "交付材料.zip";
+  const source = Buffer.alloc(1024 * 1024 + 23, 0xa5);
+  source.write("PK");
+  source[source.length - 1] = 0;
+  fs.writeFileSync(path.join(cwd, fileName), source);
+  const received = [];
+  let offset = 0;
+  let fileVersion;
+  while (offset < source.length) {
+    const piece = await handleWorkspaceMethod("workspace/readFileChunk", { cwd, path: fileName, offset, fileVersion });
+    assert.equal(piece.fileName, fileName);
+    assert.equal(piece.byteLength, source.length);
+    assert.equal(piece.offset, offset);
+    fileVersion ??= piece.fileVersion;
+    assert.equal(piece.fileVersion, fileVersion);
+    const data = Buffer.from(piece.data, "base64");
+    assert.ok(data.length > 0 && data.length <= 1024 * 1024);
+    received.push(data);
+    offset += data.length;
+  }
+  assert.ok(received.length > 1);
+  assert.deepEqual(Buffer.concat(received), source);
+});
+
+test("workspace/readFileChunk rejects a changed file and an out-of-workspace symlink", async (t) => {
+  const cwd = makeGitWorkspace();
+  const outside = makeGitWorkspace();
+  t.after(() => fs.rmSync(cwd, { recursive: true, force: true }));
+  t.after(() => fs.rmSync(outside, { recursive: true, force: true }));
+  const fileName = "report.pdf";
+  fs.writeFileSync(path.join(cwd, fileName), Buffer.alloc(1024 * 1024 + 8, 1));
+  const first = await handleWorkspaceMethod("workspace/readFileChunk", { cwd, path: fileName, offset: 0 });
+  fs.appendFileSync(path.join(cwd, fileName), "\0");
+  await assert.rejects(() => handleWorkspaceMethod("workspace/readFileChunk", {
+    cwd, path: fileName, offset: 1024 * 1024, fileVersion: first.fileVersion,
+  }), { errorCode: "file_changed" });
+  fs.writeFileSync(path.join(outside, fileName), "private");
+  await assert.rejects(() => handleWorkspaceMethod("workspace/readFileChunk", {
+    cwd, path: path.join(outside, fileName), offset: 0,
+  }), { errorCode: "file_path_not_allowed" });
+  if (process.platform !== "win32") {
+    fs.symlinkSync(path.join(outside, fileName), path.join(cwd, "link.pdf"));
+    await assert.rejects(() => handleWorkspaceMethod("workspace/readFileChunk", {
+      cwd, path: "link.pdf", offset: 0,
+    }), { errorCode: "file_path_not_allowed" });
+  }
+});
+
+test("workspace/readFileChunk handles empty files and validates download limits", async (t) => {
+  const cwd = makeGitWorkspace();
+  t.after(() => fs.rmSync(cwd, { recursive: true, force: true }));
+  const fileName = "empty.docx";
+  const fullPath = path.join(cwd, fileName);
+  fs.writeFileSync(fullPath, "");
+  const empty = await handleWorkspaceMethod("workspace/readFileChunk", { cwd, path: fileName, offset: 0 });
+  assert.equal(empty.byteLength, 0);
+  assert.equal(empty.data, "");
+  await assert.rejects(() => handleWorkspaceMethod("workspace/readFileChunk", {
+    cwd, path: fileName, offset: -1,
+  }), { errorCode: "invalid_file_offset" });
+  fs.truncateSync(fullPath, 100 * 1024 * 1024 + 1);
+  await assert.rejects(() => handleWorkspaceMethod("workspace/readFileChunk", {
+    cwd, path: fileName, offset: 0,
+  }), { errorCode: "file_too_large" });
+});

@@ -211,7 +211,7 @@ extension CodexService {
            let lastError,
            shouldRetryWithApprovalsReviewerFallback(lastError) {
             throw CodexServiceError.invalidInput(
-                "Approve for me requires a newer Codex version. Update Codex on your Mac and retry."
+                "Approve for me requires a newer Codex version. Update Codex on your computer and retry."
             )
         }
 
@@ -674,7 +674,7 @@ extension CodexService {
         guard let reviewer = result["approvalsReviewer"]?.stringValue else {
             if expected.mode == .autoReview {
                 throw CodexServiceError.invalidInput(
-                    "Approve for me is not supported by this Codex runtime. Update Codex on your Mac and retry."
+                    "Approve for me is not supported by this Codex runtime. Update Codex on your computer and retry."
                 )
             }
             return

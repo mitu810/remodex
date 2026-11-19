@@ -61,7 +61,7 @@ struct SidebarNewChatProjectPickerSheet: View {
                                                 .foregroundStyle(.secondary)
                                         ),
                                         title: choice.label,
-                                        subtitle: "Detached worktree from the default branch."
+                                        subtitle: String(localized: "Detached worktree from the default branch.")
                                     )
                                 }
                                 .buttonStyle(.plain)
@@ -88,8 +88,8 @@ struct SidebarNewChatProjectPickerSheet: View {
                                     .font(AppFont.body(weight: .medium))
                                     .foregroundStyle(.secondary)
                             ),
-                            title: "Add Local Folder",
-                            subtitle: "Browse or create a folder on your device."
+                            title: String(localized: "Add Local Folder"),
+                            subtitle: String(localized: "Browse or create a folder on your device.")
                         )
                     }
                     .buttonStyle(.plain)
@@ -112,8 +112,8 @@ struct SidebarNewChatProjectPickerSheet: View {
                                         .font(AppFont.body(weight: .medium))
                                         .foregroundStyle(.secondary)
                                 ),
-                                title: "Quick Chat",
-                                subtitle: "Start a chat without a working directory."
+                                title: String(localized: "Quick Chat"),
+                                subtitle: String(localized: "Start a chat without a working directory.")
                             )
                         }
                         .buttonStyle(.plain)

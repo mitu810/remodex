@@ -665,3 +665,20 @@ function withTempDaemonEnv(run) {
     throw error;
   }
 }
+
+test('Mac service refresh preserves explicit Codex binary and home across fresh-shell restarts', async () => {
+  await withTempDaemonEnv(async ({ rootDir }) => {
+    const env = { ...process.env, HOME: rootDir, REMODEX_RELAY: 'ws://localhost:9000/relay', CODEX_HOME: '/custom/codex-home', REMODEX_CODEX_COMMAND: '/custom/bin/codex' };
+    const options = { env, platform: 'darwin', execFileSyncImpl() {} };
+    const installed = await startMacOSBridgeService(options);
+    const fresh = { ...env };
+    delete fresh.CODEX_HOME;
+    delete fresh.REMODEX_CODEX_COMMAND;
+    await restartMacOSBridgeService({ ...options, env: fresh });
+    const plist = fs.readFileSync(installed.plistPath, 'utf8');
+    assert.ok(plist.includes('<key>CODEX_HOME</key>'));
+    assert.ok(plist.includes('/custom/codex-home'));
+    assert.ok(plist.includes('<key>REMODEX_CODEX_COMMAND</key>'));
+    assert.ok(plist.includes('/custom/bin/codex'));
+  });
+});

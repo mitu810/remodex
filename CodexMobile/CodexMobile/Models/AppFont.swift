@@ -20,7 +20,7 @@ enum AppFont {
 
         var title: String {
             switch self {
-            case .system: return "System"
+            case .system: return String(localized: "System")
             case .systemRounded: return "SF Pro Rounded"
             case .geist: return "Geist"
             case .geistMono: return "Geist Mono"
@@ -31,15 +31,15 @@ enum AppFont {
         var subtitle: String {
             switch self {
             case .system:
-                return "Use the native iOS font for regular text. Code stays monospaced."
+                return String(localized: "Use the native iOS font for regular text. Code stays monospaced.")
             case .systemRounded:
-                return "Use the rounded native iOS font for regular text. Code stays monospaced."
+                return String(localized: "Use the rounded native iOS font for regular text. Code stays monospaced.")
             case .geist:
-                return "Use Geist for regular text. Code stays monospaced."
+                return String(localized: "Use Geist for regular text. Code stays monospaced.")
             case .geistMono:
-                return "Use Geist Mono for regular text and code."
+                return String(localized: "Use Geist Mono for regular text and code.")
             case .jetBrainsMono:
-                return "Use JetBrains Mono for regular text and code."
+                return String(localized: "Use JetBrains Mono for regular text and code.")
             }
         }
     }
@@ -491,20 +491,20 @@ enum UserBubbleColor: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .default: return "Default"
-        case .red: return "Red"
-        case .orange: return "Orange"
-        case .yellow: return "Yellow"
-        case .green: return "Green"
-        case .mint: return "Mint"
-        case .blue: return "Blue"
-        case .indigo: return "Indigo"
-        case .teal: return "Teal"
-        case .cyan: return "Cyan"
-        case .pink: return "Pink"
-        case .purple: return "Purple"
-        case .brown: return "Brown"
-        case .black: return "Primary"
+        case .default: return String(localized: "Default")
+        case .red: return String(localized: "Red")
+        case .orange: return String(localized: "Orange")
+        case .yellow: return String(localized: "Yellow")
+        case .green: return String(localized: "Green")
+        case .mint: return String(localized: "Mint")
+        case .blue: return String(localized: "Blue")
+        case .indigo: return String(localized: "Indigo")
+        case .teal: return String(localized: "Teal")
+        case .cyan: return String(localized: "Cyan")
+        case .pink: return String(localized: "Pink")
+        case .purple: return String(localized: "Purple")
+        case .brown: return String(localized: "Brown")
+        case .black: return String(localized: "Primary")
         }
     }
 

@@ -66,18 +66,9 @@ enum WorkspaceFileLinkResolver {
         "dockerfile", "gemfile", "makefile", "podfile"
     ]
 
-    // Converts markdown link destinations into local paths the paired Mac can read.
+    // Converts markdown link destinations into paths the paired host can read.
     static func localPath(from url: URL) -> String? {
-        if url.isFileURL {
-            return normalizedPath(url.path)
-        }
-
-        guard url.scheme == nil else {
-            return nil
-        }
-
-        let rawValue = url.absoluteString.removingPercentEncoding ?? url.absoluteString
-        return normalizedPath(rawValue)
+        RemoteHostPath.linkDestination(url).flatMap(normalizedPath)
     }
 
     fileprivate static func preferredPreviewKind(for path: String) -> WorkspaceLinkedFilePreviewKind {
@@ -101,18 +92,19 @@ enum WorkspaceFileLinkResolver {
     }
 
     private static func isLocalPathCandidate(_ value: String) -> Bool {
-        if value.hasPrefix("/") || value.hasPrefix("./") || value.hasPrefix("../") {
+        if RemoteHostPath.projectPath(value) != nil || value.hasPrefix("./") || value.hasPrefix("../") {
             return true
         }
         guard !looksLikeSchemeLessWebURL(value) else {
             return false
         }
 
-        let fileName = (value as NSString).lastPathComponent.lowercased()
+        let fileName = value.pathDisplayName.lowercased()
         let fileExtension = (value as NSString).pathExtension.lowercased()
         return extensionlessFileNames.contains(fileName)
             || textFileExtensions.contains(fileExtension)
             || imageFileExtensions.contains(fileExtension)
+            || WorkspaceFileDownload.supports(value)
     }
 
     private static func looksLikeSchemeLessWebURL(_ value: String) -> Bool {
@@ -356,23 +348,27 @@ struct WorkspaceLinkedFilePreviewScreen: View {
 
     var body: some View {
         Group {
-            switch payload {
-            case .image(let imagePayload):
-                ZoomableImagePreviewScreen(payload: imagePayload, onDismiss: onDismiss)
-            case .svg(let svgPayload):
-                WorkspaceSVGFilePreviewScreen(payload: svgPayload, onDismiss: onDismiss, onReload: {
-                    Task { await loadPreview(force: true) }
-                })
-            case .text(let file):
-                WorkspaceTextFileViewerScreen(file: file, onDismiss: onDismiss, onReload: {
-                    Task { await loadPreview(force: true) }
-                })
-            case nil:
-                loadingOrErrorScreen
+            if WorkspaceFileDownload.supports(request.path) {
+                WorkspaceFileDownloadScreen(request: request, fileName: fileName, onDismiss: onDismiss)
+            } else {
+                switch payload {
+                case .image(let imagePayload):
+                    ZoomableImagePreviewScreen(payload: imagePayload, onDismiss: onDismiss)
+                case .svg(let svgPayload):
+                    WorkspaceSVGFilePreviewScreen(payload: svgPayload, onDismiss: onDismiss, onReload: {
+                        Task { await loadPreview(force: true) }
+                    })
+                case .text(let file):
+                    WorkspaceTextFileViewerScreen(file: file, onDismiss: onDismiss, onReload: {
+                        Task { await loadPreview(force: true) }
+                    })
+                case nil:
+                    loadingOrErrorScreen
+                }
             }
         }
         .task(id: request.id) {
-            await loadPreview()
+            if !WorkspaceFileDownload.supports(request.path) { await loadPreview() }
         }
     }
 
@@ -431,7 +427,7 @@ struct WorkspaceLinkedFilePreviewScreen: View {
     }
 
     private var fileName: String {
-        let basename = (request.path as NSString).lastPathComponent
+        let basename = RemoteHostPath.displayName(request.path, relativeTo: request.currentWorkingDirectory)
         return basename.isEmpty ? "File" : basename
     }
 
@@ -541,6 +537,101 @@ struct WorkspaceLinkedFilePreviewScreen: View {
         guard !primaryMessage.isEmpty else { return fallbackMessage }
         guard !fallbackMessage.isEmpty, fallbackMessage != primaryMessage else { return primaryMessage }
         return "\(primaryMessage)\n\(fallbackMessage)"
+    }
+}
+
+private struct WorkspaceFileDownloadScreen: View {
+    let request: WorkspaceFilePreviewRequest
+    let fileName: String
+    let onDismiss: () -> Void
+
+    @Environment(CodexService.self) private var codex
+    @State private var downloadID: UUID?
+    @State private var downloadedFile: WorkspaceFileDownload?
+    @State private var isChoosingDestination = false
+    @State private var progress = 0.0
+    @State private var message: String?
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 16) {
+                RemodexIcon.image(systemName: "doc.fill")
+                    .font(AppFont.system(size: 36, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                Text(fileName)
+                    .font(AppFont.subheadline(weight: .semibold))
+                    .multilineTextAlignment(.center)
+
+                if downloadID != nil {
+                    ProgressView("Downloading file…", value: progress)
+                } else {
+                    Button {
+                        downloadID = UUID()
+                    } label: {
+                        Label("Download to Files", systemImage: "arrow.down")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(isChoosingDestination)
+                }
+
+                if let message {
+                    Text(message)
+                        .font(AppFont.caption())
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+            }
+            .padding(28)
+            .frame(maxWidth: 420)
+            .navigationTitle("File")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done") {
+                        discardDownloadedFile()
+                        onDismiss()
+                    }
+                }
+            }
+        }
+        .task(id: downloadID) {
+            if downloadID != nil { await download() }
+        }
+        .fileMover(isPresented: $isChoosingDestination, file: downloadedFile?.url) { result in
+            switch result {
+            case .success:
+                message = String(localized: "Saved to Files.")
+            case .failure(let error):
+                message = error.localizedDescription
+            }
+            discardDownloadedFile()
+        } onCancellation: {
+            discardDownloadedFile()
+        }
+    }
+
+    private func download() async {
+        progress = 0
+        message = nil
+        defer { downloadID = nil }
+        do {
+            let file = try await codex.downloadWorkspaceFile(path: request.path, cwd: request.currentWorkingDirectory) {
+                progress = $0
+            }
+            guard !Task.isCancelled else {
+                file.discard()
+                return
+            }
+            downloadedFile = file
+            isChoosingDestination = true
+        } catch {
+            if !Task.isCancelled { message = error.localizedDescription }
+        }
+    }
+
+    private func discardDownloadedFile() {
+        downloadedFile?.discard()
+        downloadedFile = nil
     }
 }
 
@@ -802,7 +893,7 @@ private struct WorkspaceTextFilePreviewToolbarTitle: View {
     }
 
     private var parentDirectoryName: String? {
-        let parent = (file.path as NSString).deletingLastPathComponent
+        let parent = (RemoteHostPath.slashPath(file.path) as NSString).deletingLastPathComponent
         let lastComponent = (parent as NSString).lastPathComponent
         guard !lastComponent.isEmpty, lastComponent != "/" else { return nil }
         return lastComponent

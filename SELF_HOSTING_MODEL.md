@@ -1,103 +1,33 @@
-# Public Repo and Self-Hosting
+# Local Runtime and Pairing Model
 
-This file explains what the public Remodex repository is for, what it includes, and what it does not include.
+Remodex runs on computers you control. The repository includes the iOS client, the Node.js bridge, and the local relay. It does not include a hosted endpoint or private credentials.
 
-If you cloned Remodex from GitHub, the intended path is local-first usage or self-hosting on infrastructure you control.
+## What runs where
 
-## What the Public Repo Includes
+- macOS, native Windows, or Linux: Codex, Git, repository files, bridge identity, and the bridge.
+- Your local computer or another device on your private network: the relay.
+- iPhone: the paired remote client.
 
-The public repository includes:
+The relay forwards encrypted application messages. It does not run Codex or Git. The first QR scan establishes trust; reconnects reuse the saved computer identity. Legacy `macDeviceId` and relay role names remain protocol compatibility fields, not macOS requirements.
 
-- the bridge that runs on your Mac
-- the iOS app source code
-- the public relay code
-- local pairing and self-hosting documentation
+## Foreground and background operation
 
-The public repository is meant to be usable without any private hosted dependency baked into the source tree.
+`remodex run` runs the bridge in its terminal. `remodex up` starts the native background service and prints a fresh pairing QR:
 
-## What the Public Repo Does Not Include
+| Platform | Background owner | Session scope |
+|---|---|---|
+| macOS | launchd LaunchAgent | Current user |
+| Windows | Task Scheduler | Current user, while logged in; starts at logon |
+| Linux | systemd user service | User manager; logout behavior depends on its configuration |
 
-The public repository does not include:
+Windows runs native Codex and does not require WSL. A Linux host without systemd can use the foreground bridge. User services do not install or keep alive the local relay; manage that process separately.
 
-- a private production relay URL
-- private App Store build defaults
-- private npm publish-time defaults
-- private notification credentials
-- private deployment secrets
+## Configuration and trust
 
-If you are running from source, assume you must provide your own relay setup.
+Authenticate Codex on the same computer and as the same user that runs the bridge. Keep `CODEX_HOME`, executable selection, Git and repositories in that native environment. The service captures supported nonsecret environment settings, including `CODEX_HOME` and `REMODEX_CODEX_COMMAND`; it does not copy API keys from the terminal into its service manifest.
 
-The public repo now also includes the trusted-Mac reconnect flow, but the built-in background daemon for that flow is currently macOS-only.
+Set `REMODEX_RELAY` to an address reachable by both the host and phone. For public access, use a stable WSS hostname and keep the relay behind a TLS proxy on the same computer. A DDNS update can move the hostname to a new IP without changing the pairing URL. Keep real hostnames, pairing files, identity keys, and notification credentials private. See the [WSS setup](Docs/self-hosting.md#public-access-with-wss).
 
-## The Self-Hosting Path
+`remodex uninstall-service` removes service registration while preserving local configuration and trust. `remodex reset-pairing` stops the bridge before clearing trusted phones. It preserves the computer’s identity key.
 
-If you use the public repo, you should expect one of these flows:
-
-1. Local LAN pairing on your own machine with `./run-local-remodex.sh`
-2. A self-hosted relay on your own VPS, passed in through `REMODEX_RELAY`
-
-That means:
-
-- Codex still runs on your Mac
-- git commands still run on your Mac
-- the iPhone is still a paired remote client
-- the relay is only the transport layer
-- the first QR scan bootstraps trust
-- later reconnects can reuse that trusted Mac over the same relay
-
-For most GitHub users, the easiest first step is:
-
-```sh
-git clone https://github.com/Emanuele-web04/remodex.git
-cd remodex
-./run-local-remodex.sh
-```
-
-For the full public setup guide, read [Docs/self-hosting.md](Docs/self-hosting.md).
-
-If you want the smoothest self-hosted iPhone path, prefer a relay reachable through Tailscale or another stable private network instead of plain LAN-only routing.
-
-## Why the Repo Stays Generic
-
-The public repo stays generic on purpose.
-
-That keeps the self-host path honest:
-
-- people can inspect the transport and pairing code
-- people can run Remodex locally
-- people can self-host their own relay
-- people are not silently tied to someone else's hosted infrastructure
-
-## Official Builds and Published Packages
-
-Official builds or published packages may be configured differently at release time.
-
-For example, an official package may include a default relay chosen during publishing, while the public source checkout stays empty by default.
-
-That does not change the goal of the public repo:
-
-- GitHub source should stay self-host friendly
-- private release configuration should stay out of Git
-
-## What to Keep Private
-
-If you fork or self-host Remodex, keep these things out of the public repo:
-
-- your deployed hostname
-- your VPS IP addresses
-- any APNs credentials
-- any private build overrides
-- any publish-time package defaults
-
-Those belong in your own environment, private config, or release pipeline.
-
-## Short Version
-
-If you cloned Remodex from GitHub:
-
-- do not expect a private hosted relay to be built in
-- use `./run-local-remodex.sh` for local testing
-- use `REMODEX_RELAY` for your own VPS or hosted relay
-- use QR once to trust the Mac, then let reconnect reuse that trust
-- remember that the built-in daemon/background service path is currently macOS-only
-- treat the public repo as the self-hostable version of the project
+See [Docs/self-hosting.md](Docs/self-hosting.md) for native setup. Automated checks cover runtime and service contracts; real Windows/Linux phone pairing, reboot and reconnect checks are still required before declaring those environments fully validated.

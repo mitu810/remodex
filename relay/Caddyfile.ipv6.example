@@ -1,0 +1,24 @@
+{
+	admin off
+	auto_https disable_redirects
+	servers {
+		protocols h1 h2
+	}
+	log {
+		format filter {
+			wrap json
+			request>uri delete
+		}
+	}
+}
+
+# Use a DNS-only AAAA record and a Caddy build with dns.providers.cloudflare.
+{$REMODEX_RELAY_DOMAIN}:{$REMODEX_WSS_PORT:9999} {
+	bind tcp6/::
+	tls {
+		dns cloudflare {env.CF_API_TOKEN}
+	}
+	reverse_proxy 127.0.0.1:{$REMODEX_RELAY_PORT:9999} {
+		header_up X-Real-IP {http.request.remote.host}
+	}
+}

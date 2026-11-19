@@ -15,8 +15,8 @@ enum SidebarTaskViewMode: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .activity: return "Activity"
-        case .projects: return "Projects"
+        case .activity: return String(localized: "Activity")
+        case .projects: return String(localized: "Projects")
         }
     }
 
@@ -43,9 +43,9 @@ enum SidebarContentScope: String, CaseIterable, Hashable, Identifiable {
     var title: String {
         switch self {
         case .projects:
-            return "Projects"
+            return String(localized: "Projects")
         case .chats:
-            return "Chats"
+            return String(localized: "Chats")
         }
     }
 }
@@ -120,7 +120,7 @@ enum SidebarThreadGrouping {
             groups.append(
                 SidebarThreadGroup(
                     id: "pinned",
-                    label: "Pinned",
+                    label: String(localized: "Pinned"),
                     kind: .pinned,
                     sortDate: firstPinned.updatedAt ?? firstPinned.createdAt ?? .distantPast,
                     projectPath: nil,
@@ -290,7 +290,7 @@ enum SidebarThreadGrouping {
 
         return SidebarThreadGroup(
             id: "chats:rootless",
-            label: "Chats",
+            label: String(localized: "Chats"),
             kind: .chat,
             sortDate: liveThreads
                 .compactMap { $0.updatedAt ?? $0.createdAt }
@@ -368,8 +368,7 @@ enum SidebarThreadGrouping {
     }
 
     private static func projectPathComponents(_ path: String) -> [String] {
-        path
-            .replacingOccurrences(of: "\\", with: "/")
+        RemoteHostPath.slashPath(path)
             .split(separator: "/")
             .map(String.init)
     }

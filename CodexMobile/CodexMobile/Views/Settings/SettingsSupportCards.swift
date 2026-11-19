@@ -12,14 +12,14 @@ struct SettingsAboutCard: View {
 
     var body: some View {
         SettingsCard(
-            title: "About",
-            footer: "Chats are end-to-end encrypted between your iPhone and paired device."
+            title: String(localized: "About"),
+            footer: String(localized: "Chats are end-to-end encrypted between your iPhone and paired device.")
         ) {
             Button {
                 HapticFeedback.shared.triggerImpactFeedback(style: .light)
                 onShowHowItWorks()
             } label: {
-                SettingsLinkRow(title: "How Remodex Works") {
+                SettingsLinkRow(title: String(localized: "How Remodex Works")) {
                     RemodexIcon.image(systemName: "info.circle")
                 }
             }
@@ -30,7 +30,7 @@ struct SettingsAboutCard: View {
                     UIApplication.shared.open(url)
                 }
             } label: {
-                SettingsLinkRow(title: "Chat & Support") {
+                SettingsLinkRow(title: String(localized: "Chat & Support")) {
                     Image("x-icon")
                         .renderingMode(.template)
                         .resizable()
@@ -43,7 +43,7 @@ struct SettingsAboutCard: View {
                 HapticFeedback.shared.triggerImpactFeedback(style: .light)
                 UIApplication.shared.open(AppEnvironment.privacyPolicyURL)
             } label: {
-                SettingsLinkRow(title: "Privacy Policy") {
+                SettingsLinkRow(title: String(localized: "Privacy Policy")) {
                     RemodexIcon.image(systemName: "hand.raised")
                 }
             }
@@ -52,7 +52,7 @@ struct SettingsAboutCard: View {
                 HapticFeedback.shared.triggerImpactFeedback(style: .light)
                 UIApplication.shared.open(AppEnvironment.termsOfUseURL)
             } label: {
-                SettingsLinkRow(title: "Terms of Use") {
+                SettingsLinkRow(title: String(localized: "Terms of Use")) {
                     RemodexIcon.image(systemName: "doc.text")
                 }
             }

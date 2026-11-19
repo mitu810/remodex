@@ -28,10 +28,10 @@ struct TurnTimelineCommandGroupView: View {
     private var title: String {
         var parts: [String] = []
         if group.commandCount > 0 {
-            parts.append(group.commandCount == 1 ? "Ran 1 command" : "Ran \(group.commandCount) commands")
+            parts.append(group.commandCount == 1 ? String(localized: "Ran 1 command") : String(localized: "Ran \(group.commandCount) commands"))
         }
         if group.toolCallCount > 0 {
-            parts.append(group.toolCallCount == 1 ? "1 tool call" : "\(group.toolCallCount) tool calls")
+            parts.append(group.toolCallCount == 1 ? String(localized: "1 tool call") : String(localized: "\(group.toolCallCount) tool calls"))
         }
         if group.failedCommandCount > 0 {
             parts.append("\(group.failedCommandCount) failed")
@@ -41,7 +41,7 @@ struct TurnTimelineCommandGroupView: View {
         }
         // Tool-only groups with blank activity text would otherwise render an
         // empty disclosure button.
-        return parts.isEmpty ? "Tool activity" : parts.joined(separator: " · ")
+        return parts.isEmpty ? String(localized: "Tool activity") : parts.joined(separator: " · ")
     }
 
     var body: some View {
@@ -62,7 +62,7 @@ struct TurnTimelineCommandGroupView: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel(title)
-            .accessibilityHint(isExpanded ? "Collapse commands" : "Expand commands")
+            .accessibilityHint(isExpanded ? String(localized: "Collapse commands") : String(localized: "Expand commands"))
 
             if isExpanded {
                 ForEach(group.orderedMessages) { message in

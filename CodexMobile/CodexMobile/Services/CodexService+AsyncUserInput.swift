@@ -107,7 +107,7 @@ extension CodexService {
                     method: "turn/steer",
                     params: .object(payload),
                     timeoutNanoseconds: 30_000_000_000,
-                    timeoutMessage: "The answer may have reached Codex, but confirmation timed out. Check on your Mac.",
+                    timeoutMessage: "The answer may have reached Codex, but confirmation timed out. Check on your computer.",
                     onDispatch: { deliveryMayHaveStarted = true }
                 )
                 markMessageDeliveryState(

@@ -28,21 +28,21 @@ struct SidebarTopActionsRow: View {
             actionButton(
                 action: .newChat,
                 systemName: "square.and.pencil",
-                label: "New Chat",
+                label: String(localized: "New Chat"),
                 tap: onNewChat
             )
 
             actionButton(
                 action: .quickChat,
                 systemName: "message",
-                label: "Quick Chat",
+                label: String(localized: "Quick Chat"),
                 tap: onQuickChat
             )
 
             actionButton(
                 action: .newProject,
                 systemName: "folder",
-                label: "New Project",
+                label: String(localized: "New Project"),
                 tap: onNewProject
             )
         }

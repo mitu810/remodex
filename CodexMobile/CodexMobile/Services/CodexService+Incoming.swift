@@ -1841,7 +1841,7 @@ extension CodexService {
 
         let turnId = extractTurnID(from: normalizedParams)
         guard let threadId = resolveThreadID(from: normalizedParams, turnIdHint: turnId) else {
-            debugRuntimeLog("generated image event dropped reason=missing-thread event=image_generation_end path=\(URL(fileURLWithPath: imagePath).lastPathComponent)")
+            debugRuntimeLog("generated image event dropped reason=missing-thread event=image_generation_end path=\(imagePath.pathDisplayName)")
             return false
         }
 
@@ -1855,7 +1855,7 @@ extension CodexService {
             itemId: itemId,
             imagePath: imagePath
         )
-        debugRuntimeLog("generated image event appended thread=\(threadId) turn=\(turnId ?? "") item=\(itemId ?? "") path=\(URL(fileURLWithPath: imagePath).lastPathComponent)")
+        debugRuntimeLog("generated image event appended thread=\(threadId) turn=\(turnId ?? "") item=\(itemId ?? "") path=\(imagePath.pathDisplayName)")
         return true
     }
 
@@ -2701,7 +2701,7 @@ extension CodexService {
             firstStringValue(in: eventObject, keys: ["saved_path", "savedPath", "path", "file_path"]),
             firstStringValue(in: paramsObject, keys: ["saved_path", "savedPath", "path", "file_path"])
         ])
-        let pathName = pathValue.map { URL(fileURLWithPath: $0).lastPathComponent } ?? ""
+        let pathName = pathValue.map { $0.pathDisplayName } ?? ""
         let resultLength = [
             itemObject?["result"]?.stringValue?.count,
             eventObject?["result"]?.stringValue?.count,

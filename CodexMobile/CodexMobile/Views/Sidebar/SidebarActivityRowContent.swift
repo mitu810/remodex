@@ -50,7 +50,7 @@ struct SidebarActivityRowContent: View {
                     RemodexIcon.image(systemName: projectLabel == nil ? "bubble.left" : "folder", size: 13)
                         .foregroundStyle(.secondary)
                         .frame(width: 18, height: 18)
-                    Text(projectLabel ?? "Chats")
+                    Text(projectLabel ?? String(localized: "Chats"))
                         .font(AppFont.footnote())
                         .foregroundStyle(.secondary)
                         .lineLimit(1)

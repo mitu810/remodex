@@ -938,6 +938,44 @@ test("resume replay resets overlapping sequence numbers from a previous bridge e
   assert.equal(outboundPayload.payloadText, JSON.stringify({ id: "initialize", result: { ok: true } }));
 });
 
+test("a transient account reply is sent only on the captured handshake and never replayed", () => {
+  const macIdentity = createOkpKeyPair("ed25519");
+  const phoneIdentity = createOkpKeyPair("ed25519");
+  const wire = [];
+  const secureTransport = createTestBridgeSecureTransport({
+    sessionId: "account-transient-session",
+    relayUrl: "wss://relay.example/relay",
+    deviceState: {
+      macDeviceId: "account-host",
+      macIdentityPrivateKey: macIdentity.privateKey,
+      macIdentityPublicKey: macIdentity.publicKey,
+      trustedPhones: { phone: phoneIdentity.publicKey },
+    },
+  });
+  secureTransport.bindLiveSendWireMessage((message) => wire.push(message));
+  const reconnect = () => finishHandshake({
+    secureTransport,
+    sessionId: "account-transient-session",
+    macDeviceId: "account-host",
+    phoneDeviceId: "phone",
+    macIdentity,
+    phoneIdentity,
+    phoneEphemeral: createOkpKeyPair("x25519"),
+    handshakeMode: HANDSHAKE_MODE_TRUSTED_RECONNECT,
+    lastAppliedBridgeOutboundSeq: 0,
+  });
+  reconnect();
+  const reply = secureTransport.captureTransientApplicationSender();
+  const initialCount = wire.length;
+  reply(JSON.stringify({ id: "check-1", result: { credential: "test fixture" } }));
+  assert.equal(wire.length, initialCount + 1);
+
+  reconnect();
+  assert.equal(wire.length, initialCount + 1, "the new handshake must not replay the account reply");
+  reply(JSON.stringify({ id: "check-2", result: { credential: "test fixture" } }));
+  assert.equal(wire.length, initialCount + 1, "a stale reply must not reach the new handshake");
+});
+
 function finishHandshake({
   secureTransport,
   sessionId,

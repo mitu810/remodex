@@ -7,6 +7,7 @@
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
+const { writePrivateFile } = require('./private-state');
 
 const DEFAULT_STATE_DIR_NAME = ".remodex";
 const DAEMON_CONFIG_FILE = "daemon-config.json";
@@ -97,15 +98,8 @@ function ensureRemodexLogsDir({ fsImpl = fs, ...options } = {}) {
   fsImpl.mkdirSync(resolveBridgeLogsDir(options), { recursive: true });
 }
 
-function writeJsonFile(targetPath, value, { fsImpl = fs } = {}) {
-  fsImpl.mkdirSync(path.dirname(targetPath), { recursive: true });
-  const serialized = JSON.stringify(value, null, 2);
-  fsImpl.writeFileSync(targetPath, serialized, { mode: 0o600 });
-  try {
-    fsImpl.chmodSync(targetPath, 0o600);
-  } catch {
-    // Best-effort only on filesystems without POSIX mode support.
-  }
+function writeJsonFile(targetPath, value, options = {}) {
+  writePrivateFile(targetPath, JSON.stringify(value, null, 2), options);
 }
 
 function readJsonFile(targetPath, { fsImpl = fs } = {}) {

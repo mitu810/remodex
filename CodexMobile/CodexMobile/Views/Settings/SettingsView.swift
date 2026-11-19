@@ -44,6 +44,7 @@ private enum SettingsActivePresentation: Equatable {
 }
 
 struct SettingsView: View {
+    var connectCredentialDevice: ((String) async throws -> Void)? = nil
     @Environment(CodexService.self) private var codex
     @Environment(SubscriptionService.self) private var subscriptions
     @AppStorage("codex.appFontStyle") private var appFontStyleRawValue = AppFont.defaultStoredStyleRawValue
@@ -53,20 +54,23 @@ struct SettingsView: View {
     var body: some View {
         List {
             SettingsAppearanceCard(appFontStyle: appFontStyleBinding)
+            SettingsHistoryCard()
             SettingsNotificationsCard()
             SettingsRuntimeDefaultsCard()
             SettingsBridgeVersionCard {
                 presentSettingsSheet(.commandReference)
             }
-            SettingsSubscriptionCard(
-                onShowPaywall: {
-                    presentSettingsSheet(.paywall)
-                },
-                onRedeemCode: {
-                    presentOfferCodeRedemption()
-                }
-            )
-            SettingsUsageCard()
+            if subscriptions.isBillingEnabled {
+                SettingsSubscriptionCard(
+                    onShowPaywall: {
+                        presentSettingsSheet(.paywall)
+                    },
+                    onRedeemCode: {
+                        presentOfferCodeRedemption()
+                    }
+                )
+            }
+            SettingsUsageCard(connectCredentialDevice: connectCredentialDevice)
             SettingsGPTAccountCard {
                 presentSettingsSheet(.macLoginInfo)
             }
@@ -217,7 +221,27 @@ struct SettingsView: View {
     }
 }
 
+private struct SettingsHistoryCard: View {
+    @AppStorage(ThreadHistoryPageSize.storageKey) private var pageSize = ThreadHistoryPageSize.defaultValue
+
+    var body: some View {
+        SettingsCard(
+            title: String(localized: "Chat History"),
+            footer: String(localized: "Pull down at the top of a chat to load earlier messages. Each load reveals cached messages first, or requests older turns from your paired device.")
+        ) {
+            Picker("Load Size", selection: $pageSize) {
+                ForEach(ThreadHistoryPageSize.allCases, id: \.self) { size in
+                    Text("\(size.messageCount) messages / \(size.turnCount) turns")
+                        .tag(size)
+                }
+            }
+            .pickerStyle(.menu)
+        }
+    }
+}
+
 private struct SettingsUsageCard: View {
+    let connectCredentialDevice: ((String) async throws -> Void)?
     @Environment(CodexService.self) private var codex
     @Environment(\.scenePhase) private var scenePhase
 
@@ -225,9 +249,17 @@ private struct SettingsUsageCard: View {
 
     var body: some View {
         SettingsCard(
-            title: "Usage",
-            footer: "Account-wide rate limits from your paired device."
+            title: String(localized: "Usage"),
+            footer: String(localized: "Account-wide rate limits from your paired device.")
         ) {
+            NavigationLink {
+                SettingsCodexCredentialsView(connectDevice: connectCredentialDevice)
+            } label: {
+                SettingsLinkRow(title: String(localized: "Codex Accounts"), showsDisclosure: false) {
+                    RemodexIcon.image(systemName: "person.crop.circle")
+                }
+            }
+
             UsageStatusSummaryContent(
                 contextWindowUsage: nil,
                 showsContextWindowSection: false,
@@ -236,7 +268,7 @@ private struct SettingsUsageCard: View {
                 rateLimitsErrorMessage: codex.rateLimitsErrorMessage,
                 showsRateLimitHeader: false,
                 refreshControl: UsageStatusRefreshControl(
-                    title: "Refresh",
+                    title: String(localized: "Refresh"),
                     isRefreshing: isRefreshing,
                     action: refreshStatus
                 )
@@ -292,9 +324,24 @@ private struct SettingsAppearanceCard: View {
     private let settingsAccentColor = Color.primary
 
     var body: some View {
-        SettingsCard(title: "Appearance") {
+        SettingsCard(title: String(localized: "Appearance")) {
+            Button {
+                if let url = URL(string: UIApplication.openSettingsURLString) {
+                    UIApplication.shared.open(url)
+                }
+            } label: {
+                SettingsLinkRow(
+                    title: String(localized: "Language"),
+                    subtitle: String(localized: "Choose English or Simplified Chinese in iOS Settings."),
+                    showsDisclosure: false
+                ) {
+                    RemodexIcon.image(systemName: "globe")
+                }
+            }
+            .buttonStyle(.plain)
+
             SettingsMenuPickerRow(
-                title: "Font",
+                title: String(localized: "Font"),
                 value: appFontStyle.title,
                 options: AppFont.Style.allCases.map { style in
                     SettingsMenuPickerOption(value: style, title: style.title)
@@ -374,13 +421,13 @@ private struct SettingsPetCompanionSection: View {
                 if petStore.availablePets.isEmpty {
                     SettingsInlineMessage(
                         text: petStore.isLoading
-                            ? "Loading pets from your device…"
+                            ? String(localized: "Loading pets from your device…")
                             : "No local pets found in ~/.codex/pets."
                     )
                 } else {
                     SettingsMenuPickerRow(
-                        title: "Pet",
-                        value: petStore.selectedPet?.displayName ?? "None",
+                        title: String(localized: "Pet"),
+                        value: petStore.selectedPet?.displayName ?? String(localized: "None"),
                         options: petStore.availablePets.map { pet in
                             SettingsMenuPickerOption(value: pet.id, title: pet.displayName)
                         },
@@ -392,7 +439,7 @@ private struct SettingsPetCompanionSection: View {
                     SettingsInlineMessage(text: errorMessage, tint: .red)
                 }
 
-                SettingsButton("Refresh Pets", isLoading: petStore.isLoading) {
+                SettingsButton(String(localized: "Refresh Pets"), isLoading: petStore.isLoading) {
                     HapticFeedback.shared.triggerImpactFeedback(style: .light)
                     Task {
                         await petStore.refreshPets(codex: codex)
@@ -444,13 +491,13 @@ private struct SettingsNotificationsCard: View {
 
     var body: some View {
         SettingsCard(
-            title: "Notifications",
-            footer: "Local alerts work while Remodex can run in the background. Reliable alerts after iOS suspends the app require a configured push service."
+            title: String(localized: "Notifications"),
+            footer: String(localized: "Local alerts work while Remodex can run in the background. Reliable alerts after iOS suspends the app require a configured push service.")
         ) {
-            SettingsValueRow(title: "Permission", value: statusLabel)
+            SettingsValueRow(title: String(localized: "Permission"), value: statusLabel)
 
             if codex.notificationAuthorizationStatus == .notDetermined {
-                SettingsButton("Allow Notifications") {
+                SettingsButton(String(localized: "Allow Notifications")) {
                     HapticFeedback.shared.triggerImpactFeedback()
                     Task {
                         await codex.requestNotificationPermission()
@@ -459,7 +506,7 @@ private struct SettingsNotificationsCard: View {
             }
 
             if codex.notificationAuthorizationStatus == .denied {
-                SettingsButton("Open iOS Settings") {
+                SettingsButton(String(localized: "Open iOS Settings")) {
                     HapticFeedback.shared.triggerImpactFeedback()
                     if let url = URL(string: UIApplication.openNotificationSettingsURLString) {
                         UIApplication.shared.open(url)
@@ -482,12 +529,12 @@ private struct SettingsNotificationsCard: View {
 
     private var statusLabel: String {
         switch codex.notificationAuthorizationStatus {
-        case .authorized: "Authorized"
-        case .denied: "Denied"
-        case .provisional: "Provisional"
-        case .ephemeral: "Ephemeral"
-        case .notDetermined: "Not requested"
-        @unknown default: "Unknown"
+        case .authorized: String(localized: "Authorized")
+        case .denied: String(localized: "Denied")
+        case .provisional: String(localized: "Provisional")
+        case .ephemeral: String(localized: "Ephemeral")
+        case .notDetermined: String(localized: "Not requested")
+        @unknown default: String(localized: "Unknown")
         }
     }
 }
@@ -496,14 +543,14 @@ private struct SettingsGPTAccountCard: View {
     let onShowInfo: () -> Void
 
     var body: some View {
-        SettingsCard(title: "Voice") {
+        SettingsCard(title: String(localized: "Voice")) {
             Button {
                 HapticFeedback.shared.triggerImpactFeedback(style: .light)
                 onShowInfo()
             } label: {
                 SettingsLinkRow(
-                    title: "ChatGPT Setup",
-                    subtitle: "Auth and transcription on your paired Mac"
+                    title: String(localized: "ChatGPT Setup"),
+                    subtitle: String(localized: "Auth and transcription on your paired computer")
                 ) {
                     RemodexIcon.image(systemName: "waveform")
                 }
@@ -522,24 +569,24 @@ private struct SettingsBridgeVersionCard: View {
 
     var body: some View {
         SettingsCard(
-            title: "Bridge",
+            title: String(localized: "Bridge"),
             footer: guidanceText
         ) {
             SettingsValueRow(
-                title: "Status",
+                title: String(localized: "Status"),
                 value: versionStatusLabel,
                 valueColor: versionStatusColor
             )
 
             SettingsValueRow(
-                title: "Installed",
+                title: String(localized: "Installed"),
                 value: installedVersionLabel,
                 valueColor: installedValueStyle,
                 usesMonospacedValue: true
             )
 
             SettingsValueRow(
-                title: "Latest",
+                title: String(localized: "Latest"),
                 value: latestVersionLabel,
                 usesMonospacedValue: true
             )
@@ -553,13 +600,22 @@ private struct SettingsBridgeVersionCard: View {
                 .disabled(!codex.isConnected || isUpdatingBridge)
             }
 
+            Link(destination: RemodexBridgeRelease.url) {
+                SettingsLinkRow(
+                    title: String(localized: "Open GitHub Releases"),
+                    subtitle: String(localized: "Download the bridge update package and script")
+                ) {
+                    RemodexIcon.image(systemName: "arrow.down.circle")
+                }
+            }
+
             Button {
                 HapticFeedback.shared.triggerImpactFeedback(style: .light)
                 onShowCommands()
             } label: {
                 SettingsLinkRow(
-                    title: "Terminal Commands",
-                    subtitle: "Start, repair, or inspect the bridge on your Mac"
+                    title: String(localized: "Terminal Commands"),
+                    subtitle: String(localized: "Start, repair, or inspect the bridge on your \(codex.hostComputerLabel)")
                 ) {
                     RemodexIcon.image(systemName: "terminal")
                 }
@@ -584,16 +640,16 @@ private struct SettingsBridgeVersionCard: View {
     }
 
     private var installedVersionLabel: String {
-        normalizedVersion(codex.bridgeInstalledVersion) ?? "Unknown"
+        normalizedVersion(codex.bridgeInstalledVersion) ?? String(localized: "Unknown")
     }
 
     private var latestVersionLabel: String {
-        normalizedVersion(codex.latestBridgePackageVersion) ?? "Unknown"
+        normalizedVersion(codex.latestBridgePackageVersion) ?? String(localized: "Unknown")
     }
 
     private var guidanceText: String? {
         guard let installedVersion else {
-            return "Connect to your paired device to read the installed bridge version."
+            return String(localized: "Connect to your paired device to read the installed bridge version.")
         }
 
         guard let latestVersion else {
@@ -601,14 +657,14 @@ private struct SettingsBridgeVersionCard: View {
         }
 
         if installedVersion == latestVersion {
-            return "Your Mac bridge matches the latest published package."
+            return String(localized: "Your bridge matches the latest published package.")
         }
 
         if installedVersion.compare(latestVersion, options: .numeric) == .orderedAscending {
-            return "A newer Remodex package is available."
+            return String(localized: "A newer Remodex package is available.")
         }
 
-        return "This device is running a different build than npm latest."
+        return String(localized: "This bridge is newer than the latest GitHub release.")
     }
 
     private var versionStatusColor: Color {
@@ -623,32 +679,32 @@ private struct SettingsBridgeVersionCard: View {
 
     private var versionStatusLabel: String {
         guard let installedVersion else {
-            return "Unknown"
+            return String(localized: "Unknown")
         }
 
         guard let latestVersion else {
-            return "Installed"
+            return String(localized: "Installed")
         }
 
         if installedVersion == latestVersion {
-            return "Up to date"
+            return String(localized: "Up to date")
         }
 
         if installedVersion.compare(latestVersion, options: .numeric) == .orderedAscending {
-            return "Update available"
+            return String(localized: "Update available")
         }
 
-        return "Different build"
+        return String(localized: "Different build")
     }
 
     private var bridgeUpdateButtonTitle: String {
         if let installedVersion,
            let latestVersion,
            installedVersion.compare(latestVersion, options: .numeric) == .orderedAscending {
-            return "Update Bridge on Device"
+            return String(localized: "Update Bridge on Device")
         }
 
-        return "Reinstall Bridge on Device"
+        return String(localized: "Reinstall Bridge on Device")
     }
 
     private var installedValueStyle: Color {
@@ -672,7 +728,7 @@ private struct SettingsBridgeVersionCard: View {
     private func updateBridgeFromSettings() async {
         guard codex.isConnected else {
             bridgeUpdateFailed = true
-            bridgeUpdateMessage = "Connect to your paired device first."
+            bridgeUpdateMessage = String(localized: "Connect to your paired device first.")
             return
         }
 
@@ -688,7 +744,7 @@ private struct SettingsBridgeVersionCard: View {
             let handoffService = DesktopHandoffService(codex: codex)
             try await handoffService.updateBridgePackageAndRestart()
             bridgeUpdateFailed = false
-            bridgeUpdateMessage = "Bridge updated. Reconnecting after restart..."
+            bridgeUpdateMessage = String(localized: "Bridge update scheduled. Reconnecting after restart...")
         } catch {
             bridgeUpdateFailed = true
             bridgeUpdateMessage = error.localizedDescription
@@ -715,13 +771,13 @@ private struct SettingsArchivedChatsCard: View {
     }
 
     var body: some View {
-        SettingsCard(title: "Archived") {
+        SettingsCard(title: String(localized: "Archived")) {
             NavigationLink {
                 ArchivedChatsView()
             } label: {
                 SettingsLinkRow(
-                    title: "Archived Chats",
-                    subtitle: archivedCount > 0 ? "\(archivedCount) saved locally" : nil,
+                    title: String(localized: "Archived Chats"),
+                    subtitle: archivedCount > 0 ? String(localized: "\(archivedCount) saved locally") : nil,
                     showsDisclosure: false
                 ) {
                     RemodexIcon.image(systemName: "archivebox")

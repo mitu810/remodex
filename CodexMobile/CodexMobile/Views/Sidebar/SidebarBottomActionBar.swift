@@ -61,7 +61,7 @@ struct SidebarBottomActionBar: View {
             iconSystemName: "terminal.fill",
             style: .glass,
             hapticStyle: .light,
-            accessibilityLabel: "Terminal",
+            accessibilityLabel: String(localized: "Terminal"),
             onTap: onTapTerminal
         )
     }
@@ -72,7 +72,7 @@ struct SidebarBottomActionBar: View {
             style: .accent,
             isEnabled: isChatEnabled,
             isLoading: isCreatingThread,
-            accessibilityLabel: "New chat",
+            accessibilityLabel: String(localized: "New chat"),
             onTap: onTapChat
         )
     }

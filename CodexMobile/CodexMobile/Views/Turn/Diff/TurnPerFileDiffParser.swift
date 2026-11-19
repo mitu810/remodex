@@ -15,12 +15,11 @@ struct PerFileDiffChunk: Identifiable {
     let diffCode: String
 
     var compactPath: String {
-        if let last = path.split(separator: "/").last { return String(last) }
-        return path
+        path.pathDisplayName
     }
 
     var fullDirectoryPath: String? {
-        let components = path.split(separator: "/")
+        let components = RemoteHostPath.slashPath(path).split(separator: "/")
         guard components.count > 1 else { return nil }
         return components.dropLast().joined(separator: "/")
     }
@@ -69,7 +68,7 @@ nonisolated enum FileChangePathIdentity {
     }
 
     static func normalizedPath(_ rawPath: String) -> String {
-        var normalized = rawPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        var normalized = RemoteHostPath.slashPath(rawPath.trimmingCharacters(in: .whitespacesAndNewlines))
         if normalized.hasPrefix("a/") || normalized.hasPrefix("b/") {
             normalized = String(normalized.dropFirst(2))
         }
@@ -83,7 +82,7 @@ nonisolated enum FileChangePathIdentity {
     }
 
     private static func isAbsolutePath(_ rawPath: String) -> Bool {
-        rawPath.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("/")
+        RemoteHostPath.projectPath(rawPath) != nil
     }
 }
 

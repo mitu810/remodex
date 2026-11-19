@@ -6,11 +6,23 @@
 
 import Foundation
 
+enum ThreadHistoryPageSize: Int, CaseIterable {
+    case small = 5
+    case medium = 10
+    case large = 15
+    case extraLarge = 20
+
+    static let storageKey = "codex.threadHistoryPageSize"
+    static let defaultValue = Self.medium
+
+    var turnCount: Int { rawValue }
+    var messageCount: Int { rawValue * 8 }
+}
+
 enum TurnTimelineProjectionPolicy {
     // Long chats can contain thousands of persisted rows. Reveal them through a bounded
     // render window while remote turn pages extend the backing cache as needed.
     static let initialMessageLimit = 80
-    static let messagePageSize = 40
     static let eagerHydrationMessageLimit = 400
 }
 
@@ -25,7 +37,6 @@ enum ThreadHistoryHydrationPolicy {
     // first page or a real bridge error instead of being abandoned mid-flight.
     static let initialPageSoftTimeoutNanoseconds: UInt64 = 25_000_000_000
     static let initialTurnPageSize = 5
-    static let olderTurnPageSize = 5
     static let duplicateOlderPageSkipLimit = 12
 }
 
@@ -227,6 +238,9 @@ extension CodexService {
         }
         let isOpenCodeThread = thread(for: threadId)?.runtimeProvider == .opencode
         let refreshGeneration = currentPerThreadRefreshGeneration(for: threadId)
+        let pageSize = ThreadHistoryPageSize(rawValue: defaults.integer(forKey: ThreadHistoryPageSize.storageKey))
+            ?? .defaultValue
+        let turnCount = pageSize.turnCount
 
         loadingOlderThreadHistoryIDs.insert(threadId)
         olderHistoryLoadErrorByThreadID.removeValue(forKey: threadId)
@@ -242,16 +256,16 @@ extension CodexService {
 
             while true {
                 let startedAt = Date()
-                debugSyncLog("thread/turns/list older start thread=\(threadId) limit=\(ThreadHistoryHydrationPolicy.olderTurnPageSize)")
+                debugSyncLog("thread/turns/list older start thread=\(threadId) limit=\(turnCount)")
                 let page = try await fetchThreadTurnsHistoryPage(
                     threadId: threadId,
-                    limit: ThreadHistoryHydrationPolicy.olderTurnPageSize,
+                    limit: turnCount,
                     cursor: pageCursor,
                     timeoutNanoseconds: ThreadHistoryHydrationPolicy.requestTimeoutNanoseconds
                 )
                 let elapsedMs = Int(Date().timeIntervalSince(startedAt) * 1000)
                 let hasNextCursor = cursorHasValue(page.nextCursor)
-                debugSyncLog("thread/turns/list older thread=\(threadId) limit=\(ThreadHistoryHydrationPolicy.olderTurnPageSize) turns=\(page.turns.count) hasNextCursor=\(hasNextCursor) elapsedMs=\(elapsedMs)")
+                debugSyncLog("thread/turns/list older thread=\(threadId) limit=\(turnCount) turns=\(page.turns.count) hasNextCursor=\(hasNextCursor) elapsedMs=\(elapsedMs)")
                 guard !Task.isCancelled,
                       (!isOpenCodeThread || isPerThreadRefreshCurrent(for: threadId, generation: refreshGeneration)) else {
                     return
@@ -453,7 +467,7 @@ extension CodexService {
                 return
             }
             noteThreadHistoryRemoteRevealFailed(threadId: threadId)
-            olderHistoryLoadErrorByThreadID[threadId] = "Couldn't load earlier messages. Tap to retry."
+            olderHistoryLoadErrorByThreadID[threadId] = String(localized: "Couldn't load earlier messages. Tap to retry.")
             refreshThreadTimelineState(for: threadId)
             debugSyncLog("failed to load older history page for thread=\(threadId): \(error.localizedDescription)")
         }
@@ -545,13 +559,6 @@ extension CodexService {
         }
     }
 
-    func noteThreadHistoryRevealRequested(threadId: String) {
-        noteThreadHistoryRevealRequested(
-            threadId: threadId,
-            pageSize: TurnTimelineProjectionPolicy.messagePageSize
-        )
-    }
-
     // Rolls back an optimistic remote reveal when the server page did not arrive.
     func noteThreadHistoryRemoteRevealFailed(threadId: String) {
         let loadedCount = messagesByThread[threadId]?.count ?? 0
@@ -605,7 +612,7 @@ extension CodexService {
         if activeThreadId == threadId, (messagesByThread[threadId]?.isEmpty ?? true) {
             lastErrorMessage = activeErrorMessage
         } else {
-            olderHistoryLoadErrorByThreadID[threadId] = "Couldn't load earlier messages. Tap to retry."
+            olderHistoryLoadErrorByThreadID[threadId] = String(localized: "Couldn't load earlier messages. Tap to retry.")
         }
         markThreadNeedingCanonicalHistoryReconcile(threadId)
         refreshThreadTimelineState(for: threadId)

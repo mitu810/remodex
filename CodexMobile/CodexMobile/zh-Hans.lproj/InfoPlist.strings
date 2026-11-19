@@ -1,0 +1,5 @@
+"NSCameraUsageDescription" = "Remodex 需要使用相机扫描配对二维码，并拍摄照片作为会话附件。";
+"NSLocalNetworkUsageDescription" = "Remodex 需要访问本地网络，以连接配对设备上的 Codex 服务。";
+"NSMicrophoneUsageDescription" = "Remodex 需要使用麦克风录制语音，并交由 ChatGPT 转写。";
+"NSPhotoLibraryUsageDescription" = "Remodex 需要访问照片图库，以便在消息中添加图片。";
+"NSPhotoLibraryAddUsageDescription" = "Remodex 需要将渲染后的图表和附件保存到照片图库。";

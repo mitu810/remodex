@@ -75,77 +75,12 @@ nonisolated struct AssistantMarkdownImageReference: Identifiable, Equatable {
             return true
         }
 
-        let normalizedPath = Self.normalizedLocalPath(path)
-        guard !normalizedPath.isEmpty else {
+        guard let cwd = currentWorkingDirectory, let resolved = RemoteHostPath.resolve(path, against: cwd) else {
             return false
         }
-
-        guard let currentWorkingDirectory = currentWorkingDirectory,
-              let resolvedPath = Self.workspaceResolvedPath(
-                normalizedPath,
-                currentWorkingDirectory: currentWorkingDirectory
-              ) else {
-            return false
-        }
-
-        return Self.isPath(resolvedPath, inside: currentWorkingDirectory)
+        return RemoteHostPath.relativePath(resolved, inside: cwd) != nil
     }
 
-    private static func normalizedLocalPath(_ value: String) -> String {
-        value
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .replacingOccurrences(of: "\\", with: "/")
-    }
-
-    private static func workspaceResolvedPath(_ path: String, currentWorkingDirectory: String) -> String? {
-        let normalizedRoot = normalizedPathComponentsPath(currentWorkingDirectory)
-        guard normalizedRoot.hasPrefix("/") else {
-            return nil
-        }
-
-        if path.hasPrefix("/") {
-            return normalizedPathComponentsPath(path)
-        }
-
-        return normalizedPathComponentsPath("\(normalizedRoot)/\(path)")
-    }
-
-    private static func isPath(_ path: String, inside root: String) -> Bool {
-        let normalizedPath = normalizedPathComponentsPath(path)
-        var normalizedRoot = normalizedPathComponentsPath(root)
-        while normalizedRoot.count > 1, normalizedRoot.hasSuffix("/") {
-            normalizedRoot.removeLast()
-        }
-        guard normalizedRoot != "/" else {
-            return normalizedPath.hasPrefix("/")
-        }
-        return normalizedPath == normalizedRoot || normalizedPath.hasPrefix("\(normalizedRoot)/")
-    }
-
-    // Resolves "." and ".." lexically; the Mac bridge still does the authoritative realpath check.
-    private static func normalizedPathComponentsPath(_ value: String) -> String {
-        let normalized = normalizedLocalPath(value)
-        let isAbsolute = normalized.hasPrefix("/")
-        var components: [String] = []
-
-        for component in normalized.split(separator: "/", omittingEmptySubsequences: true) {
-            switch component {
-            case ".":
-                continue
-            case "..":
-                if !components.isEmpty {
-                    components.removeLast()
-                } else if !isAbsolute {
-                    components.append(String(component))
-                }
-            default:
-                components.append(String(component))
-            }
-        }
-
-        let joined = components.joined(separator: "/")
-        return isAbsolute ? "/\(joined)" : joined
-    }
 }
 
 enum AssistantMarkdownContentSegment: Identifiable, Equatable {
@@ -346,12 +281,12 @@ nonisolated enum AssistantMarkdownImageReferenceParser {
     }
 
     private static func normalizedImagePath(_ raw: String) -> String {
-        var candidate = raw
+        let candidate = raw
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .trimmingCharacters(in: CharacterSet(charactersIn: "\"'`<>"))
 
-        if candidate.hasPrefix("file://") {
-            candidate = String(candidate.dropFirst("file://".count))
+        if candidate.hasPrefix("file://"), let url = URL(string: candidate) {
+            return RemoteHostPath.linkDestination(url) ?? candidate
         }
         return candidate.removingPercentEncoding ?? candidate
     }
@@ -362,7 +297,7 @@ nonisolated enum AssistantMarkdownImageReferenceParser {
             return trimmedAlt
         }
 
-        let basename = (match.path as NSString).lastPathComponent
+        let basename = match.path.pathDisplayName
         return basename.isEmpty ? "Image" : basename
     }
 }
@@ -449,10 +384,11 @@ enum CommandOutputImageReferenceParser {
             candidate.removeLast()
         }
 
-        if candidate.hasPrefix("file://") {
-            candidate = String(candidate.dropFirst("file://".count))
+        if candidate.hasPrefix("file://"), let url = URL(string: candidate) {
+            candidate = RemoteHostPath.linkDestination(url) ?? candidate
+        } else {
+            candidate = candidate.removingPercentEncoding ?? candidate
         }
-        candidate = candidate.removingPercentEncoding ?? candidate
         guard !containsWildcardSyntax(candidate) else {
             return nil
         }
@@ -461,15 +397,7 @@ enum CommandOutputImageReferenceParser {
             return nil
         }
 
-        if candidate.hasPrefix("/") {
-            return candidate
-        }
-
-        guard let baseDirectory,
-              baseDirectory.hasPrefix("/") else {
-            return nil
-        }
-        return (baseDirectory as NSString).appendingPathComponent(candidate)
+        return RemoteHostPath.resolve(candidate, against: baseDirectory)
     }
 
     static func isImagePath(_ path: String) -> Bool {
@@ -494,16 +422,11 @@ enum CommandOutputImageReferenceParser {
         guard let listedPath = pathCandidates.last else {
             return cwd
         }
+        guard let directory = RemoteHostPath.resolve(listedPath, against: cwd) else { return nil }
         if isImagePath(listedPath) {
-            return (listedPath as NSString).deletingLastPathComponent
+            return (RemoteHostPath.slashPath(directory) as NSString).deletingLastPathComponent
         }
-        if listedPath.hasPrefix("/") {
-            return listedPath
-        }
-        guard let cwd, cwd.hasPrefix("/") else {
-            return nil
-        }
-        return (cwd as NSString).appendingPathComponent(listedPath)
+        return directory
     }
 
     private static func unwrapShellCommand(_ raw: String) -> String {

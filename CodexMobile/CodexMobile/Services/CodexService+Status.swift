@@ -7,6 +7,10 @@
 import Foundation
 
 extension CodexService {
+    func savedCredentialRateLimitBuckets(from payload: IncomingParamsObject) -> [CodexRateLimitBucket] {
+        decodeRateLimitBuckets(from: payload).sorted { $0.sortDurationMins < $1.sortDurationMins }
+    }
+
     // Refreshes the shared usage surfaces with thread context (when available) plus account rate limits.
     func refreshUsageStatus(threadId: String?) async {
         if let normalizedThreadID = normalizedUsageStatusThreadID(threadId) {

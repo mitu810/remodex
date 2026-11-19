@@ -16,6 +16,7 @@ const {
   buildHeartbeatBridgeStatus,
   canonicalThreadTurnsListRequest,
   createMacOSBridgeWakeAssertion,
+  createBridgeSessionSupervisor,
   createThreadTurnsListFastPageCoordinator,
   decodeOpenCodeThreadListCursor,
   disableUnsupportedReasoningSummaryForTurnStart,
@@ -35,6 +36,34 @@ const {
   sanitizeThreadHistoryImagesForRelay,
   shouldSuppressRolloutMirrorForThread,
 } = require("../src/bridge");
+
+test("credential restart replaces the bridge session only after its Codex process stops", async () => {
+  const calls = [];
+  let finishStop;
+  let restart;
+  const supervisor = createBridgeSessionSupervisor(({ relaySessionId, scheduleRestart }) => {
+    calls.push(["start", relaySessionId]);
+    restart = scheduleRestart;
+    return {
+      relaySessionId: "retained-session",
+      stop: () => {
+        calls.push(["stop"]);
+        return new Promise((resolve) => { finishStop = resolve; });
+      },
+    };
+  }, { restartDelayMs: 0 });
+
+  const restarting = restart();
+  assert.equal(restart(), restarting);
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.deepEqual(calls, [["start", undefined], ["stop"]]);
+  finishStop();
+  await restarting;
+  assert.deepEqual(calls, [["start", undefined], ["stop"], ["start", "retained-session"]]);
+  const stopping = supervisor.stop();
+  finishStop();
+  await stopping;
+});
 
 test("OpenCode requests route by explicit creation provider or namespaced thread id", () => {
   const runtime = { handlesThreadId: (id) => id.startsWith("opencode:ses_") };
@@ -1375,6 +1404,24 @@ test("fetchAdaptiveThreadTurnsListForRelay caps initial mobile pages to five tur
   );
 });
 
+test("fetchAdaptiveThreadTurnsListForRelay honors larger older pages within bounded batches", async () => {
+  const fetches = [];
+  const response = await fetchAdaptiveThreadTurnsListForRelay({
+    id: "req-older-turns",
+    params: { threadId: "thread-small", limit: 20, cursor: "5" },
+  }, {
+    fetchPage: async ({ limit, cursor }) => {
+      const offset = Number(cursor);
+      fetches.push(limit);
+      return { data: makeTurns(offset + 1, limit), nextCursor: String(offset + limit) };
+    },
+  });
+
+  assert.deepEqual(fetches, [1, 4, 5, 5, 5]);
+  assert.deepEqual(response.result.data, makeTurns(6, 20));
+  assert.equal(response.result.nextCursor, "25");
+});
+
 test("fetchAdaptiveThreadTurnsListForRelay skips JSONL augmentation while sizing relay pages", async () => {
   const request = {
     id: "req-turns-list-sizing-context",
@@ -1543,13 +1590,14 @@ test("fetchAdaptiveThreadTurnsListForRelay forwards input and returned cursors",
     },
   });
 
-  assert.equal(response.result.items.length, 5);
-  assert.equal(response.result.nextCursor, "cursor-after-second");
+  assert.equal(response.result.items.length, 6);
+  assert.equal(response.result.nextCursor, "cursor-after-third");
   assert.deepEqual(
     fetches.map((params) => ({ limit: params.limit, cursor: params.cursor })),
     [
       { limit: 1, cursor: "cursor-before-page" },
       { limit: 4, cursor: "cursor-after-first" },
+      { limit: 1, cursor: "cursor-after-second" },
     ]
   );
 });

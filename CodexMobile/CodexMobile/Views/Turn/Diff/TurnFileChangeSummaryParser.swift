@@ -57,10 +57,7 @@ nonisolated struct TurnFileChangeSummaryEntry: Identifiable, Hashable, Sendable 
     var id: String { path }
 
     var compactPath: String {
-        if let lastComponent = path.split(separator: "/").last {
-            return String(lastComponent)
-        }
-        return path
+        path.pathDisplayName
     }
 }
 
@@ -432,8 +429,8 @@ enum TurnFileChangeSummaryParser {
         }
 
         if let url = URL(string: normalized) {
-            if url.isFileURL {
-                return url.path
+            if let path = RemoteHostPath.linkDestination(url) {
+                return path
             }
             if !url.path.isEmpty {
                 return url.path

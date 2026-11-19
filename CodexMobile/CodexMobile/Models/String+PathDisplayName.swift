@@ -10,12 +10,5 @@ import Foundation
 
 extension String {
     /// Returns the user-facing leaf of this filesystem path.
-    ///
-    /// Falls back to the original string when `lastPathComponent` would be
-    /// empty (e.g. for `"/"` or a trailing slash) so callers never have to
-    /// guard against an empty display string after splitting a path.
-    var pathDisplayName: String {
-        let basename = (self as NSString).lastPathComponent
-        return basename.isEmpty ? self : basename
-    }
+    nonisolated var pathDisplayName: String { RemoteHostPath.displayName(self) }
 }

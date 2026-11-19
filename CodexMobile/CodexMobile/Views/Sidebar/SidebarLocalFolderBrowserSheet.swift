@@ -306,7 +306,7 @@ private struct SidebarLocalFolderEntriesSection: View {
             } label: {
                 SidebarLocalFolderRow(
                     iconSystemName: "arrow.uturn.left",
-                    title: "Parent Folder",
+                    title: String(localized: "Parent Folder"),
                     subtitle: parentPath
                 )
             }

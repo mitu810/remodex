@@ -87,7 +87,7 @@ enum TurnComposerMetaMapper {
     ) -> TurnComposerRuntimeLabelParts {
         guard selectedModelID != nil else {
             return TurnComposerRuntimeLabelParts(
-                modelPart: isRuntimeSelectionLoading ? "Loading…" : "Select model",
+                modelPart: isRuntimeSelectionLoading ? String(localized: "Loading…") : String(localized: "Select model"),
                 effortPart: nil
             )
         }
@@ -137,9 +137,9 @@ enum TurnComposerMetaMapper {
         let effort = variant.reasoningEffort ?? variant.id
         let effortTitle: String
         switch effort.lowercased() {
-        case "none": effortTitle = "None"
-        case "minimal": effortTitle = "Minimal"
-        case "max": effortTitle = "Max"
+        case "none": effortTitle = String(localized: "None")
+        case "minimal": effortTitle = String(localized: "Minimal")
+        case "max": effortTitle = String(localized: "Max")
         default: effortTitle = reasoningTitle(for: effort)
         }
         guard variant.id.lowercased() != effort.lowercased() else { return effortTitle }
@@ -201,13 +201,13 @@ enum TurnComposerMetaMapper {
 
         switch normalized {
         case "minimal", "low":
-            return "Low"
+            return String(localized: "Low")
         case "medium":
-            return "Medium"
+            return String(localized: "Medium")
         case "high":
-            return "High"
+            return String(localized: "High")
         case "xhigh", "extra_high", "extra-high", "very_high", "very-high":
-            return "Extra High"
+            return String(localized: "Extra High")
         default:
             return normalized.split(separator: "_")
                 .map { $0.capitalized }

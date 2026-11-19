@@ -58,8 +58,8 @@ private extension CodexService {
     var threadForkBridgeUpdatePrompt: CodexBridgeUpdatePrompt {
         CodexBridgeUpdatePrompt(
             title: "Update Remodex on your device to use /fork",
-            message: "This device bridge does not support native conversation forks yet. Update the Remodex npm package to use /fork and worktree fork flows.",
-            command: "npm install -g remodex@latest"
+            message: "This device bridge does not support native conversation forks yet. Update the bridge from GitHub Releases to use /fork and worktree fork flows.",
+            command: RemodexBridgeRelease.updateCommand
         )
     }
 }

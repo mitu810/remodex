@@ -278,7 +278,7 @@ extension CodexService {
             eventObject: eventObject,
             itemObject: itemObject
         ) else {
-            debugRuntimeLog("generated image item dropped type=\(itemType) item=\(itemId) path=\(URL(fileURLWithPath: imagePath).lastPathComponent) reason=missing-context")
+            debugRuntimeLog("generated image item dropped type=\(itemType) item=\(itemId) path=\(imagePath.pathDisplayName) reason=missing-context")
             return
         }
 
@@ -288,7 +288,7 @@ extension CodexService {
             itemId: context.identity.itemId,
             imagePath: imagePath
         )
-        debugRuntimeLog("generated image item appended type=\(itemType) thread=\(context.threadId) turn=\(context.identity.turnId ?? "") item=\(context.identity.itemId ?? "") path=\(URL(fileURLWithPath: imagePath).lastPathComponent)")
+        debugRuntimeLog("generated image item appended type=\(itemType) thread=\(context.threadId) turn=\(context.identity.turnId ?? "") item=\(context.identity.itemId ?? "") path=\(imagePath.pathDisplayName)")
     }
 
     // Creates streaming assistant placeholder when an assistant item starts.

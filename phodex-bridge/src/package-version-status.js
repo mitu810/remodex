@@ -1,38 +1,36 @@
 // FILE: package-version-status.js
-// Purpose: Reads the installed Remodex package version and caches the latest published npm version.
+// Purpose: Reads the installed Remodex package version and caches the latest published GitHub release.
 // Layer: CLI helper
 // Exports: createBridgePackageVersionStatusReader
 // Depends on: https, ../package.json
 
-const https = require("https");
-const { version: installedVersion = "" } = require("../package.json");
+const { version: installedVersion = "", releaseRepository } = require("../package.json");
+const { fetchLatestBridgeRelease, supportsInstalledBridgeUpdate } = require("./bridge-release");
 
 const DEFAULT_CACHE_TTL_MS = 30 * 60 * 1000;
 const DEFAULT_EMPTY_CACHE_RETRY_MS = 60 * 1000;
 const DEFAULT_INITIAL_FETCH_WAIT_MS = 250;
-const REMODEX_REGISTRY_URL = "https://registry.npmjs.org/remodex/latest";
 
 function createBridgePackageVersionStatusReader({
   cacheTtlMs = DEFAULT_CACHE_TTL_MS,
   emptyCacheRetryMs = DEFAULT_EMPTY_CACHE_RETRY_MS,
   initialFetchWaitMs = DEFAULT_INITIAL_FETCH_WAIT_MS,
-  registryUrl = REMODEX_REGISTRY_URL,
   fetchLatestPublishedVersionImpl = fetchLatestPublishedVersion,
 } = {}) {
   let cachedLatestVersion = "";
   let lastSuccessfulResolveAt = 0;
   let lastAttemptedAt = 0;
   let inFlightPromise = null;
+  const bridgeCanInstallRelease = supportsInstalledBridgeUpdate();
 
   // Shares one cached lookup across repeated Settings/account refreshes without
-  // holding the local account status path hostage on a slow npm registry call.
+  // holding the local account status path hostage on a slow release lookup.
   return async function readBridgePackageVersionStatus() {
     const now = Date.now();
     refreshLatestVersionInBackground({
       now,
       cacheTtlMs,
       emptyCacheRetryMs,
-      registryUrl,
       fetchLatestPublishedVersionImpl,
       getCachedLatestVersion: () => cachedLatestVersion,
       getLastSuccessfulResolveAt: () => lastSuccessfulResolveAt,
@@ -61,11 +59,13 @@ function createBridgePackageVersionStatusReader({
     return {
       bridgeVersion: normalizeVersion(installedVersion) || null,
       bridgeLatestVersion: reportedLatestVersion || null,
+      bridgeReleaseRepository: releaseRepository,
+      bridgeCanInstallRelease,
     };
   };
 }
 
-// Waits briefly on the very first lookup so fast registry responses can populate
+// Waits briefly on the very first lookup so fast release responses can populate
 // Settings immediately, while slow/offline requests still fall back to background refresh.
 async function resolveReportedLatestVersion({
   initialFetchWaitMs,
@@ -95,7 +95,6 @@ function refreshLatestVersionInBackground({
   now,
   cacheTtlMs,
   emptyCacheRetryMs,
-  registryUrl,
   fetchLatestPublishedVersionImpl,
   getCachedLatestVersion,
   getLastSuccessfulResolveAt,
@@ -121,7 +120,7 @@ function refreshLatestVersionInBackground({
 
   setLastAttemptedAt(now);
   setInFlightPromise(
-    fetchLatestPublishedVersionImpl(registryUrl)
+    fetchLatestPublishedVersionImpl()
       .then((latestVersion) => {
         setCachedLatestVersion(latestVersion);
         setLastSuccessfulResolveAt(Date.now());
@@ -134,40 +133,8 @@ function refreshLatestVersionInBackground({
   );
 }
 
-function fetchLatestPublishedVersion(registryUrl) {
-  return new Promise((resolve, reject) => {
-    const request = https.get(registryUrl, (response) => {
-      if (response.statusCode !== 200) {
-        response.resume();
-        reject(new Error(`Unexpected npm registry status: ${response.statusCode || "unknown"}`));
-        return;
-      }
-
-      let raw = "";
-      response.setEncoding("utf8");
-      response.on("data", (chunk) => {
-        raw += chunk;
-      });
-      response.on("end", () => {
-        try {
-          const parsed = JSON.parse(raw);
-          const latestVersion = normalizeVersion(parsed?.version);
-          if (!latestVersion) {
-            reject(new Error("npm registry response missing version"));
-            return;
-          }
-          resolve(latestVersion);
-        } catch (error) {
-          reject(error);
-        }
-      });
-    });
-
-    request.setTimeout(4_000, () => {
-      request.destroy(new Error("npm registry request timed out"));
-    });
-    request.on("error", reject);
-  });
+async function fetchLatestPublishedVersion() {
+  return (await fetchLatestBridgeRelease()).version;
 }
 
 function normalizeVersion(value) {

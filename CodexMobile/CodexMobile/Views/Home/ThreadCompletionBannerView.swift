@@ -142,8 +142,8 @@ struct ThreadCompletionBannerView: View {
     var body: some View {
         InAppToastBannerView(
             title: banner.title,
-            subtitle: "Answer ready in another chat",
-            accessibilityHint: "Opens the completed chat.",
+            subtitle: String(localized: "Answer ready in another chat"),
+            accessibilityHint: String(localized: "Opens the completed chat."),
             isDismissable: true,
             onTap: onTap,
             onDismiss: onDismiss

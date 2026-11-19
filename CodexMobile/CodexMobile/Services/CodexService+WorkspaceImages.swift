@@ -203,7 +203,7 @@ extension CodexService {
     private func parseWorkspaceImageMetadata(result: RPCObject, fallbackPath path: String) -> WorkspaceImageMetadata {
         WorkspaceImageMetadata(
             path: result["path"]?.stringValue ?? path,
-            fileName: result["fileName"]?.stringValue ?? (path as NSString).lastPathComponent,
+            fileName: result["fileName"]?.stringValue ?? path.pathDisplayName,
             mimeType: result["mimeType"]?.stringValue ?? "image",
             byteLength: result["byteLength"]?.intValue ?? 0,
             mtimeMs: result["mtimeMs"]?.doubleValue,
@@ -214,7 +214,7 @@ extension CodexService {
     private func parseWorkspaceTextFileMetadata(result: RPCObject, fallbackPath path: String) -> WorkspaceTextFileMetadata {
         WorkspaceTextFileMetadata(
             path: result["path"]?.stringValue ?? path,
-            fileName: result["fileName"]?.stringValue ?? (path as NSString).lastPathComponent,
+            fileName: result["fileName"]?.stringValue ?? path.pathDisplayName,
             byteLength: result["byteLength"]?.intValue ?? 0,
             mtimeMs: result["mtimeMs"]?.doubleValue,
             encoding: result["encoding"]?.stringValue ?? "utf-8"

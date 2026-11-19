@@ -99,6 +99,9 @@ struct MyDevicesSettingsSheet: View {
                 }
             }
         }
+        .task {
+            if codex.isConnected { await codex.refreshGPTAccountState() }
+        }
         .confirmationDialog(
             "Switch device?",
             isPresented: pendingSwitchDialogBinding,
@@ -138,6 +141,7 @@ struct MyDevicesSettingsSheet: View {
                             .lineLimit(1)
 
                         statusLine(for: device)
+                        credentialLine(for: device)
                     }
 
                     Spacer(minLength: 8)
@@ -175,7 +179,7 @@ struct MyDevicesSettingsSheet: View {
         return UIMenu(
             title: "",
             children: [
-                UIMenu(title: "Switch to", options: [.displayInline], children: switchActions),
+                UIMenu(title: String(localized: "Switch to"), options: [.displayInline], children: switchActions),
             ]
         )
     }
@@ -213,6 +217,7 @@ struct MyDevicesSettingsSheet: View {
                     .font(AppFont.caption())
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
+                credentialLine(for: device)
             }
 
             Spacer(minLength: 8)
@@ -309,6 +314,16 @@ struct MyDevicesSettingsSheet: View {
     }
 
     @ViewBuilder
+    private func credentialLine(for device: MyDeviceRowModel) -> some View {
+        if let label = device.credentialLabel {
+            Text(label)
+                .font(AppFont.caption())
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
+    }
+
+    @ViewBuilder
     private func statusLine(for device: MyDeviceRowModel) -> some View {
         HStack(spacing: 6) {
             if device.isConnected {
@@ -349,11 +364,11 @@ struct MyDevicesSettingsSheet: View {
 
     private var switchingOverlay: some View {
         DeviceSwitchingOverlayView(
-            title: "Switching device…",
+            title: String(localized: "Switching device…"),
             primaryStatus: nil,
             secondaryStatus: nil,
             deviceName: devices.first(where: \.isSwitching)?.compactDisplayName,
-            cancelTitle: "Cancel",
+            cancelTitle: String(localized: "Cancel"),
             isCancelDisabled: false,
             onCancel: onCancelSwitch
         )

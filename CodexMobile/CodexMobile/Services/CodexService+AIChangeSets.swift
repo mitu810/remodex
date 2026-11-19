@@ -793,15 +793,6 @@ private extension CodexService {
     }
 
     func isSameOrDescendantPath(_ candidate: String, root: String) -> Bool {
-        guard !candidate.isEmpty, !root.isEmpty else {
-            return false
-        }
-        if candidate == root {
-            return true
-        }
-        if root == "/" {
-            return candidate.hasPrefix("/")
-        }
-        return candidate.hasPrefix(root + "/")
+        RemoteHostPath.relativePath(candidate, inside: root) != nil
     }
 }

@@ -50,7 +50,7 @@ struct ComposerAttachmentMenu: View {
         var modeActions: [UIMenuElement] = []
         if allowsPlanMode {
             modeActions.append(UIAction(
-                title: "Plan mode",
+                title: String(localized: "Plan mode"),
                 image: RemodexIcon.menuUIImage(systemName: "remodex.plan-mode"),
                 state: isPlanModeArmed ? .on : .off
             ) { _ in
@@ -62,7 +62,7 @@ struct ComposerAttachmentMenu: View {
         if allowsFastMode && runtimeState.supportsFastMode {
             modeActions.append(
                 UIAction(
-                    title: "Fast Mode",
+                    title: String(localized: "Fast Mode"),
                     image: RemodexIcon.menuUIImage(systemName: fastModePlusMenuIconName),
                     state: runtimeState.isSelectedServiceTier(.fast) ? .on : .off
                 ) { _ in
@@ -74,7 +74,7 @@ struct ComposerAttachmentMenu: View {
 
         let attachmentActions: [UIMenuElement] = [
             UIAction(
-                title: "Photo library",
+                title: String(localized: "Photo library"),
                 image: RemodexIcon.menuUIImage(systemName: "photo"),
                 attributes: remainingAttachmentSlots == 0 ? .disabled : []
             ) { _ in
@@ -82,7 +82,7 @@ struct ComposerAttachmentMenu: View {
                 onTapAddImage()
             },
             UIAction(
-                title: "Take a photo",
+                title: String(localized: "Take a photo"),
                 image: RemodexIcon.menuUIImage(systemName: "camera.fill"),
                 attributes: remainingAttachmentSlots == 0 ? .disabled : []
             ) { _ in

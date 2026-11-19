@@ -74,7 +74,7 @@ struct TerminalScreen: View {
 
     private var routeInitialWorkingDirectory: String? {
         let trimmed = preferredWorkingDirectory?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return trimmed.isEmpty ? nil : trimmed
+        return trimmed.isEmpty || codex.requiresManualTerminalDirectory(trimmed) ? nil : trimmed
     }
 
     private var currentWorkingDirectory: String {
@@ -100,6 +100,9 @@ struct TerminalScreen: View {
     // Keep the subtitle short and stable; long cwd/user-host strings are already
     // available through terminal context and tend to crowd the navigation bar.
     private var navigationBottomLine: String {
+        if let path = preferredWorkingDirectory, !path.isEmpty, codex.requiresManualTerminalDirectory(path) {
+            return "Use cd to open the project"
+        }
         if let project = projectDisplayName(for: currentWorkingDirectory),
            !project.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return project
@@ -301,8 +304,8 @@ struct TerminalScreen: View {
     private var terminalRouteBody: some View {
         if !hasConnectionConfiguration {
             TerminalRouteUnavailableView(
-                title: "Terminal unavailable",
-                detail: "SSH connection and key are required before opening a shell.",
+                title: String(localized: "Terminal unavailable"),
+                detail: String(localized: "SSH connection and key are required before opening a shell."),
                 theme: theme,
                 action: showConnectionEditor
             )
@@ -653,7 +656,7 @@ struct TerminalScreen: View {
     private func projectDisplayName(for path: String) -> String? {
         let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
-        return URL(fileURLWithPath: trimmed).lastPathComponent
+        return trimmed.pathDisplayName
     }
 
     private func terminalDisplayLabel(_ terminalId: String) -> String {

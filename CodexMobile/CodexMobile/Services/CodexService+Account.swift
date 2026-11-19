@@ -6,11 +6,6 @@
 
 import Foundation
 
-private let minimumBridgePackageUpdateCommand = "npm install -g remodex@latest"
-private let forcedBridgeUpgradeFromVersion = "1.3.8"
-private let forcedBridgeUpgradeTargetVersion = "1.3.9"
-private let forcedBridgeUpgradeCommand = "npm install -g remodex@1.3.9"
-
 enum CodexGPTAccountStatus: String, Codable, Sendable {
     case unknown
     case unavailable
@@ -108,7 +103,7 @@ enum CodexBridgeHostPlatform: String, Codable, Sendable {
     var displayName: String {
         switch self {
         case .macOS:
-            return "Device"
+            return "Mac"
         case .linux:
             return "Linux device"
         case .windows:
@@ -219,13 +214,12 @@ extension CodexService {
         }
 
         do {
-            let bridgeState = try await fetchBridgeManagedStatusSnapshot()
+            let payload = try await fetchBridgeManagedStatusSnapshot()
             applyBridgePackageStatus(
-                from: bridgeState.payload,
-                allowMissingVersionPrompt: bridgeState.allowMissingVersionPrompt,
+                from: payload,
                 allowAvailableBridgeUpdatePrompt: allowAvailableBridgeUpdatePrompt
             )
-            applyBridgeManagedAccountSnapshot(from: bridgeState.payload)
+            applyBridgeManagedAccountSnapshot(from: payload)
         } catch {
             handleBridgeManagedAccountRefreshFailure()
         }
@@ -239,8 +233,8 @@ extension CodexService {
         }
 
         do {
-            let bridgeState = try await fetchBridgeManagedStatusSnapshot()
-            applyBridgeManagedAccountSnapshot(from: bridgeState.payload)
+            let payload = try await fetchBridgeManagedStatusSnapshot()
+            applyBridgeManagedAccountSnapshot(from: payload)
         } catch {
             handleBridgeManagedAccountRefreshFailure()
         }
@@ -253,10 +247,9 @@ extension CodexService {
         }
 
         do {
-            let bridgeState = try await fetchBridgeManagedStatusSnapshot()
+            let payload = try await fetchBridgeManagedStatusSnapshot()
             applyBridgePackageStatus(
-                from: bridgeState.payload,
-                allowMissingVersionPrompt: bridgeState.allowMissingVersionPrompt,
+                from: payload,
                 allowAvailableBridgeUpdatePrompt: allowAvailableBridgeUpdatePrompt
             )
         } catch {
@@ -688,28 +681,31 @@ extension CodexService {
         syncPendingGPTLoginStateIfNeeded()
     }
 
-    private func fetchBridgeManagedStatusSnapshot() async throws -> (
-        payload: IncomingParamsObject,
-        allowMissingVersionPrompt: Bool
-    ) {
+    private func fetchBridgeManagedStatusSnapshot() async throws -> IncomingParamsObject {
+        let deviceID = secureSession?.macDeviceId
+        let replayEpoch = lastAppliedBridgeReplayEpoch
         do {
-            let response = try await sendRequest(method: "account/status/read", params: nil)
+            let response = try await sendRequest(
+                method: "account/status/read", params: nil, expectedSecureDeviceID: deviceID
+            )
             guard let payload = response.result?.objectValue else {
                 throw CodexServiceError.invalidResponse("bridge account status response missing payload")
             }
-            return (
-                payload: payload,
-                allowMissingVersionPrompt: true
-            )
+            if let deviceID, lastAppliedBridgeReplayEpoch == replayEpoch {
+                recordManagedCredentialStatus(payload["managedCredentialStatus"]?.objectValue, for: deviceID)
+            }
+            return payload
         } catch {
-            let response = try await sendRequest(method: "getAuthStatus", params: nil)
+            let response = try await sendRequest(
+                method: "getAuthStatus", params: nil, expectedSecureDeviceID: deviceID
+            )
             guard let payload = response.result?.objectValue else {
                 throw CodexServiceError.invalidResponse("bridge account status response missing payload")
             }
-            return (
-                payload: payload,
-                allowMissingVersionPrompt: shouldTreatAsUnsupportedBridgeManagedAccountStatus(error)
-            )
+            if let deviceID, lastAppliedBridgeReplayEpoch == replayEpoch {
+                recordManagedCredentialStatus(payload["managedCredentialStatus"]?.objectValue, for: deviceID)
+            }
+            return payload
         }
     }
 
@@ -728,7 +724,6 @@ extension CodexService {
     // Applies bridge package versions and prompts independently from GPT account state.
     private func applyBridgePackageStatus(
         from payloadObject: IncomingParamsObject,
-        allowMissingVersionPrompt: Bool,
         allowAvailableBridgeUpdatePrompt: Bool
     ) {
         let previousTransportMode = codexTransportMode
@@ -746,15 +741,11 @@ extension CodexService {
             in: payloadObject,
             keys: ["bridgeVersion", "bridge_version", "bridgePackageVersion", "bridge_package_version"]
         )
-        latestBridgePackageVersion = firstStringValue(
-            in: payloadObject,
-            keys: ["bridgeLatestVersion", "bridge_latest_version", "bridgePublishedVersion", "bridge_published_version"]
-        )
+        let isForkRelease = payloadObject["bridgeReleaseRepository"]?.stringValue == RemodexBridgeRelease.repository
+        latestBridgePackageVersion = isForkRelease ? payloadObject["bridgeLatestVersion"]?.stringValue : nil
+        bridgeCanInstallRelease = isForkRelease && payloadObject["bridgeCanInstallRelease"]?.boolValue == true
         applyBridgeHostMetadata(from: payloadObject)
-        evaluateRequiredBridgePackageVersion(
-            from: payloadObject,
-            allowMissingVersionPrompt: allowMissingVersionPrompt
-        )
+        evaluateRequiredBridgePackageVersion()
         if allowAvailableBridgeUpdatePrompt {
             evaluateAvailableBridgePackageVersionPromptIfNeeded()
         }
@@ -785,88 +776,24 @@ extension CodexService {
         }
     }
 
-    // Prompts for a bridge package upgrade once per session when bridge-managed status
-    // reports an older npm package or omits the version entirely.
-    private func evaluateRequiredBridgePackageVersion(
-        from payloadObject: IncomingParamsObject,
-        allowMissingVersionPrompt: Bool
-    ) {
-        guard !hasPresentedMinimumBridgePackageUpdatePrompt else {
-            return
-        }
-
-        let bridgeVersion = firstStringValue(
-            in: payloadObject,
-            keys: ["bridgeVersion", "bridge_version", "bridgePackageVersion", "bridge_package_version"]
-        )
-        let requiresUpgrade =
-            bridgePackageVersionIsOlderThanMinimum(bridgeVersion)
-            || (bridgeVersion == nil && allowMissingVersionPrompt)
-
-        guard requiresUpgrade else {
+    // A missing version can be a transient status or fallback response during reconnect.
+    private func evaluateRequiredBridgePackageVersion() {
+        guard !hasPresentedMinimumBridgePackageUpdatePrompt,
+              let installedVersion = normalizedBridgePackageVersion(bridgeInstalledVersion),
+              installedVersion.range(of: #"^[0-9]+\.[0-9]+\.[0-9]+$"#, options: .regularExpression) != nil,
+              installedVersion.compare(CodexService.minimumSupportedBridgePackageVersion, options: .numeric) == .orderedAscending else {
             return
         }
 
         hasPresentedMinimumBridgePackageUpdatePrompt = true
-        bridgeUpdatePrompt = minimumBridgePackageUpdatePrompt(currentVersion: bridgeVersion)
-    }
-
-    // Only explicit versions can be compared here; missing versions are handled by the caller.
-    private func bridgePackageVersionIsOlderThanMinimum(_ bridgeVersion: String?) -> Bool {
-        guard let bridgeVersion = bridgeVersion?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !bridgeVersion.isEmpty else {
-            return false
-        }
-
-        return bridgeVersion.compare(CodexService.minimumSupportedBridgePackageVersion, options: .numeric) == .orderedAscending
-    }
-
-    // Distinguishes "older bridge only exposes getAuthStatus" from transient read failures on a current bridge.
-    private func shouldTreatAsUnsupportedBridgeManagedAccountStatus(_ error: Error) -> Bool {
-        guard let serviceError = error as? CodexServiceError,
-              case .rpcError(let rpcError) = serviceError else {
-            return false
-        }
-
-        if rpcError.code == -32601 {
-            return true
-        }
-
-        let message = rpcError.message.lowercased()
-        let mentionsUnsupportedMethod = message.contains("method not found")
-            || message.contains("unknown method")
-            || message.contains("not implemented")
-            || message.contains("does not support")
-        let mentionsAccountStatusRoute = message.contains("account/status/read")
-            || message.contains("account status read")
-            || message.contains("auth status")
-
-        guard rpcError.code == -32600 || rpcError.code == -32602 || rpcError.code == -32000 else {
-            return mentionsUnsupportedMethod && mentionsAccountStatusRoute
-        }
-
-        return mentionsUnsupportedMethod && mentionsAccountStatusRoute
-    }
-
-    private func minimumBridgePackageUpdatePrompt(currentVersion: String?) -> CodexBridgeUpdatePrompt {
-        let message: String
-        if let currentVersion = currentVersion?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !currentVersion.isEmpty {
-            message =
-                "This device bridge is running Remodex \(currentVersion), but this iPhone app requires Remodex \(CodexService.minimumSupportedBridgePackageVersion) or newer. Update the npm package on your device, then reconnect."
-        } else {
-            message =
-                "This device bridge is too old for this version of Remodex iPhone. Update the Remodex npm package on your device to \(CodexService.minimumSupportedBridgePackageVersion) or newer, then reconnect."
-        }
-
-        return CodexBridgeUpdatePrompt(
-            title: "Update Remodex on your device to reconnect",
-            message: message,
-            command: minimumBridgePackageUpdateCommand
+        bridgeUpdatePrompt = CodexBridgeUpdatePrompt(
+            title: String(localized: "Update Remodex on your device to reconnect"),
+            message: String(localized: "This bridge is running Remodex \(installedVersion). Update it from GitHub Releases, then reconnect."),
+            command: RemodexBridgeRelease.updateCommand
         )
     }
 
-    // Surfaces a softer "npm update available" prompt without overriding stricter compatibility prompts.
+    // Surfaces an optional fork release without overriding a compatibility warning.
     private func evaluateAvailableBridgePackageVersionPromptIfNeeded() {
         guard isAppInForeground else {
             return
@@ -877,16 +804,6 @@ extension CodexService {
         }
 
         guard let installedVersion = normalizedBridgePackageVersion(bridgeInstalledVersion) else {
-            return
-        }
-
-        if installedVersion == forcedBridgeUpgradeFromVersion {
-            guard lastPresentedAvailableBridgePackageVersion != forcedBridgeUpgradeTargetVersion else {
-                return
-            }
-
-            lastPresentedAvailableBridgePackageVersion = forcedBridgeUpgradeTargetVersion
-            bridgeUpdatePrompt = forcedBridgePackageUpdatePrompt(currentVersion: installedVersion)
             return
         }
 
@@ -921,17 +838,9 @@ extension CodexService {
         latestVersion: String
     ) -> CodexBridgeUpdatePrompt {
         CodexBridgeUpdatePrompt(
-            title: "A newer Remodex update is available on your device",
-            message: "This device bridge is running Remodex \(currentVersion), and npm now has Remodex \(latestVersion). Update the package on your device when you're ready, then reconnect to start using the newer build.",
-            command: minimumBridgePackageUpdateCommand
-        )
-    }
-
-    private func forcedBridgePackageUpdatePrompt(currentVersion: String) -> CodexBridgeUpdatePrompt {
-        CodexBridgeUpdatePrompt(
-            title: "Update Remodex on your device to reconnect",
-            message: "This device bridge is running Remodex \(currentVersion). Update the Remodex CLI on your device to \(forcedBridgeUpgradeTargetVersion), then reconnect.",
-            command: forcedBridgeUpgradeCommand
+            title: String(localized: "A newer Remodex update is available on your device"),
+            message: String(localized: "This bridge is running Remodex \(currentVersion). GitHub Releases has version \(latestVersion)."),
+            command: RemodexBridgeRelease.updateCommand
         )
     }
 

@@ -201,6 +201,7 @@ extension CodexService {
         hasResolvedRateLimitsSnapshot = false
         bridgeInstalledVersion = nil
         latestBridgePackageVersion = nil
+        bridgeCanInstallRelease = false
         clearConnectionSyncState()
         clearHydrationCaches()
         resumedThreadIDs.removeAll()
@@ -297,6 +298,7 @@ extension CodexService {
         }
 
         trustedMacRegistry.records.removeValue(forKey: targetDeviceId)
+        forgetManagedCredentialStatus(for: targetDeviceId)
         SecureStore.writeCodable(trustedMacRegistry, for: CodexSecureKeys.trustedMacRegistry)
 
         if normalizedCurrentTrustedMacDeviceId == targetDeviceId {
@@ -732,6 +734,7 @@ extension CodexService {
         supportsTurnCollaborationMode = false
         bridgeInstalledVersion = nil
         latestBridgePackageVersion = nil
+        bridgeCanInstallRelease = false
         resumedThreadIDs.removeAll()
         clearHydrationCaches()
         resetSecureTransportState()

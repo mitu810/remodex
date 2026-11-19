@@ -14,33 +14,33 @@ enum CodexAccessMode: String, Codable, CaseIterable, Hashable, Sendable {
     var displayName: String {
         switch self {
         case .onRequest:
-            return "Ask"
+            return String(localized: "Ask")
         case .autoReview:
-            return "Approve for me"
+            return String(localized: "Approve for me")
         case .fullAccess:
-            return "Full"
+            return String(localized: "Full")
         }
     }
 
     var pickerTitle: String {
         switch self {
         case .onRequest:
-            return "Ask for approval"
+            return String(localized: "Ask for approval")
         case .autoReview:
-            return "Approve for me"
+            return String(localized: "Approve for me")
         case .fullAccess:
-            return "Full access"
+            return String(localized: "Full access")
         }
     }
 
     var pickerSubtitle: String {
         switch self {
         case .onRequest:
-            return "Always ask to edit external files and use the internet"
+            return String(localized: "Always ask to edit external files and use the internet")
         case .autoReview:
-            return "Only ask for actions detected as potentially unsafe"
+            return String(localized: "Only ask for actions detected as potentially unsafe")
         case .fullAccess:
-            return "Full computer access (elevated risk)"
+            return String(localized: "Full computer access (elevated risk)")
         }
     }
 

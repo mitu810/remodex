@@ -9,6 +9,7 @@ const os = require("os");
 const path = require("path");
 const { randomUUID, generateKeyPairSync } = require("crypto");
 const { execFileSync } = require("child_process");
+const { ensurePrivateDirectory, writePrivateFile } = require('./private-state');
 
 const DEFAULT_STORE_DIR = path.join(os.homedir(), ".remodex");
 const DEFAULT_STORE_FILE = path.join(DEFAULT_STORE_DIR, "device-state.json");
@@ -56,12 +57,13 @@ function loadOrCreateBridgeDeviceState() {
   return nextState;
 }
 
-function readBridgeDeviceState() {
-  const fileRecord = readCanonicalFileStateRecord();
+function readBridgeDeviceState({ env = process.env } = {}) {
+  const fileRecord = readCanonicalFileStateRecord({ env });
   if (fileRecord.state) {
     return fileRecord.state;
   }
 
+  if (env !== process.env) return null;
   const keychainRecord = readKeychainStateRecord();
   return keychainRecord.state || null;
 }
@@ -78,8 +80,8 @@ function resetBridgeDeviceState() {
 }
 
 // Clears trusted phones while preserving the Mac's stable identity across re-pairing.
-function resetBridgeTrustState() {
-  const existingState = readBridgeDeviceState();
+function resetBridgeTrustState({ env = process.env } = {}) {
+  const existingState = readBridgeDeviceState({ env });
   if (!existingState) {
     return {
       hadState: false,
@@ -93,7 +95,7 @@ function resetBridgeTrustState() {
     trustedPhones: {},
   });
   const clearedTrustedPhones = Object.keys(existingState.trustedPhones || {}).length > 0;
-  writeBridgeDeviceState(nextState);
+  writeBridgeDeviceState(nextState, { env });
   return {
     hadState: true,
     preservedMacIdentity: true,
@@ -191,8 +193,8 @@ function createBridgeDeviceState() {
 }
 
 // Reads the canonical file-backed state and distinguishes "missing" from "corrupted".
-function readCanonicalFileStateRecord() {
-  const storeFile = resolveStoreFile();
+function readCanonicalFileStateRecord({ env = process.env } = {}) {
+  const storeFile = resolveStoreFile(env);
   if (!fs.existsSync(storeFile)) {
     return { state: null, error: null };
   }
@@ -224,32 +226,27 @@ function readKeychainStateRecord() {
   }
 }
 
-function writeBridgeDeviceState(state) {
+function writeBridgeDeviceState(state, { env = process.env } = {}) {
   const serialized = JSON.stringify(state, null, 2);
-  writeCanonicalFileStateString(serialized);
-  writeKeychainStateString(serialized);
+  writeCanonicalFileStateString(serialized, env);
+  if (env === process.env) writeKeychainStateString(serialized);
 }
 
 // Keeps the canonical file updated even when the optional Keychain mirror is unavailable.
-function writeCanonicalFileStateString(serialized) {
-  const storeDir = resolveStoreDir();
-  const storeFile = resolveStoreFile();
-  fs.mkdirSync(storeDir, { recursive: true });
-  fs.writeFileSync(storeFile, serialized, { mode: 0o600 });
-  try {
-    fs.chmodSync(storeFile, 0o600);
-  } catch {
-    // Best-effort only on filesystems that support POSIX modes.
-  }
+function writeCanonicalFileStateString(serialized, env = process.env) {
+  const storeDir = resolveStoreDir(env);
+  const storeFile = resolveStoreFile(env);
+  ensurePrivateDirectory(storeDir);
+  writePrivateFile(storeFile, serialized);
 }
 
-function resolveStoreDir() {
-  return normalizeNonEmptyString(process.env.REMODEX_DEVICE_STATE_DIR) || DEFAULT_STORE_DIR;
+function resolveStoreDir(env = process.env) {
+  return normalizeNonEmptyString(env.REMODEX_DEVICE_STATE_DIR) || DEFAULT_STORE_DIR;
 }
 
-function resolveStoreFile() {
-  return normalizeNonEmptyString(process.env.REMODEX_DEVICE_STATE_FILE)
-    || path.join(resolveStoreDir(), "device-state.json");
+function resolveStoreFile(env = process.env) {
+  return normalizeNonEmptyString(env.REMODEX_DEVICE_STATE_FILE)
+    || path.join(resolveStoreDir(env), "device-state.json");
 }
 
 function resolveKeychainMirrorFile() {

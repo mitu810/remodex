@@ -6,16 +6,28 @@ on:
       - ".github/workflows/bridge-check.yml"
       - "phodex-bridge/**"
       - "relay/**"
+      - "CodexMobile/CodexMobile/**"
   pull_request:
     paths:
       - ".github/workflows/bridge-check.yml"
       - "phodex-bridge/**"
       - "relay/**"
+      - "CodexMobile/CodexMobile/**"
 
 jobs:
   bridge-check:
-    name: Bridge tests
-    runs-on: ubuntu-latest
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            name: Bridge tests
+          - os: windows-latest
+            name: Native Windows bridge tests
+          - os: macos-latest
+            name: Native macOS bridge tests
+    runs-on: ${{ matrix.os }}
 
     steps:
       - name: Checkout repository
@@ -37,7 +49,21 @@ jobs:
         run: |
           node -e "const mod = require('./src'); const names = ['startBridge', 'openLastActiveThread', 'watchThreadRollout']; for (const name of names) { if (typeof mod[name] !== 'function') { throw new Error('Missing export: ' + name); } }"
 
-      - name: Run bridge tests
+      - name: Run native transport and service tests
+        if: runner.os != 'Linux'
+        working-directory: phodex-bridge
+        run: >-
+          node --test test/codex-transport.test.js test/codex-cli-bootstrap.test.js test/daemon-state.test.js
+          test/secure-device-state.test.js test/account-status.test.js test/remodex-cli.test.js
+          test/native-service.test.js test/private-state.test.js
+
+      - name: Run macOS launch agent and remote path tests
+        if: runner.os == 'macOS'
+        working-directory: phodex-bridge
+        run: node --test test/macos-launch-agent.test.js test/ios-remote-paths.test.js
+
+      - name: Run complete bridge suite
+        if: runner.os == 'Linux'
         working-directory: phodex-bridge
         run: npm test
 

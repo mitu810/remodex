@@ -185,8 +185,12 @@ extension CodexService {
         params: JSONValue?,
         timeoutNanoseconds: UInt64? = nil,
         timeoutMessage: String? = nil,
+        expectedSecureDeviceID: String? = nil,
         onDispatch: (@MainActor () -> Void)? = nil
     ) async throws -> RPCMessage {
+        if let expectedSecureDeviceID, secureSession?.macDeviceId != expectedSecureDeviceID {
+            throw CodexServiceError.disconnected
+        }
         if let requestTransportOverride {
             onDispatch?()
             return try await requestTransportOverride(method, params)
@@ -230,7 +234,10 @@ extension CodexService {
                         try await sendMessage(
                             request,
                             onSendAttempt: onDispatch,
-                            shouldSend: { self.pendingRequests[requestKey] != nil }
+                            shouldSend: {
+                                self.pendingRequests[requestKey] != nil
+                                    && (expectedSecureDeviceID == nil || self.secureSession?.macDeviceId == expectedSecureDeviceID)
+                            }
                         )
                     } catch {
                         if shouldTreatSendFailureAsDisconnect(error) {

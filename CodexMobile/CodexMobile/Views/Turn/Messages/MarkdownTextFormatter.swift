@@ -243,7 +243,7 @@ enum MarkdownTextFormatter {
     }
 
     private static func escapeMarkdownLinkDestination(_ destination: String) -> String {
-        destination
+        RemoteHostPath.slashPath(destination)
             .replacingOccurrences(of: " ", with: "%20")
             .replacingOccurrences(of: "(", with: "%28")
             .replacingOccurrences(of: ")", with: "%29")
@@ -262,7 +262,7 @@ enum MarkdownTextFormatter {
             candidate.removeFirst()
         }
 
-        guard candidate.hasPrefix("/") || candidate.contains("/") else {
+        guard RemoteHostPath.isWindows(candidate) || candidate.contains("/") || WorkspaceFileDownload.supports(candidate) else {
             return nil
         }
 
@@ -279,7 +279,7 @@ enum MarkdownTextFormatter {
             lineNumber = nsCandidate.substring(with: match.range(at: 2))
         }
 
-        let basename = (path as NSString).lastPathComponent
+        let basename = path.pathDisplayName
         guard !basename.isEmpty else {
             return nil
         }

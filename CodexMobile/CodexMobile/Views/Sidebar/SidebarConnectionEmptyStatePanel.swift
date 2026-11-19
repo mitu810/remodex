@@ -107,7 +107,7 @@ struct SidebarConnectionEmptyStatePanel: View {
     }
 
     private var heroTitle: String {
-        trustedPairPresentation?.name ?? "No device paired yet"
+        trustedPairPresentation?.name ?? String(localized: "No device paired yet")
     }
 
     private var accessibilityIdentityLabel: String {
@@ -245,13 +245,13 @@ struct SidebarConnectionEmptyStatePanel: View {
     private var primaryButtonTitle: String {
         switch connectionPhase {
         case .connecting:
-            return "Reconnecting…"
+            return String(localized: "Reconnecting…")
         case .loadingChats:
-            return "Loading chats…"
+            return String(localized: "Loading chats…")
         case .syncing:
-            return "Syncing…"
+            return String(localized: "Syncing…")
         case .connected:
-            return "Disconnect"
+            return String(localized: "Disconnect")
         case .offline:
             return offlinePrimaryButtonTitle
         }

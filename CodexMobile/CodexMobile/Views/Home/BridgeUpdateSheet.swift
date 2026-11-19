@@ -27,7 +27,7 @@ struct BridgeUpdateSheet: View {
 
                         Text(prompt.command == nil
                             ? "After the app finishes updating on your iPhone, reconnect to the device bridge."
-                            : "After the package finishes updating, restart the bridge on your device and come back here."
+                            : "The update script restarts the bridge. Reconnect when it finishes."
                         )
                             .font(AppFont.caption())
                             .foregroundStyle(.secondary)
@@ -66,6 +66,11 @@ struct BridgeUpdateSheet: View {
     private var updateInstructions: some View {
         VStack(alignment: .leading, spacing: 10) {
             if let command = prompt.command, !command.isEmpty {
+                Link("Open GitHub Releases", destination: RemodexBridgeRelease.url)
+                Text("Download the bridge update ZIP and script to the same folder on your computer.")
+                    .font(AppFont.body())
+                    .foregroundStyle(.secondary)
+
                 Text("Run this on your device")
                     .font(AppFont.caption(weight: .semibold))
                     .foregroundStyle(.secondary)

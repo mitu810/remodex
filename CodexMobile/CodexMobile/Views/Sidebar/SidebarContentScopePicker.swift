@@ -87,7 +87,7 @@ struct SidebarFolderExpansionToggleButton: View {
     let action: () -> Void
 
     private var title: String {
-        areAllFoldersCollapsed ? "Expand all" : "Collapse all"
+        areAllFoldersCollapsed ? String(localized: "Expand all") : String(localized: "Collapse all")
     }
 
     private var iconSystemName: String {
@@ -113,7 +113,7 @@ struct SidebarFolderExpansionToggleButton: View {
         .buttonStyle(.plain)
         .accessibilityLabel(title)
         .accessibilityHint(
-            areAllFoldersCollapsed ? "Expands all project folders" : "Collapses all project folders"
+            areAllFoldersCollapsed ? String(localized: "Expands all project folders") : String(localized: "Collapses all project folders")
         )
         .help(title)
     }

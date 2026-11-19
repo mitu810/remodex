@@ -136,3 +136,54 @@ test("shouldSkipCodexBootstrap respects the opt-out env flag", () => {
   assert.equal(shouldSkipCodexBootstrap({ REMODEX_SKIP_CODEX_BOOTSTRAP: "true" }), true);
   assert.equal(shouldSkipCodexBootstrap({ REMODEX_SKIP_CODEX_BOOTSTRAP: "0" }), false);
 });
+
+test("Windows bootstrap recognizes a preinstalled native Codex executable", () => {
+  const command = String.raw`D:\用户 & %bin%\codex.exe`;
+  const result = ensureCodexCLI({
+    platform: "win32", env: { REMODEX_CODEX_COMMAND: command }, shouldUpdate: false,
+    execFileSyncImpl(file, args) {
+      assert.equal(file, command);
+      assert.deepEqual(args, ["--version"]);
+      return "codex-cli 0.120.0";
+    },
+    logger: { log() {}, warn() {} },
+  });
+  assert.equal(result.status, "current");
+});
+
+test("Windows bootstrap installs via the discovered npm shim then rechecks the new Codex shim", () => {
+  const bin = String.raw`C:\Npm & %HOME%!\bin`;
+  const npm = `${bin}\\npm.cmd`;
+  const codex = `${bin}\\codex.cmd`;
+  let installed = false;
+  const result = ensureCodexCLI({
+    platform: "win32", env: { Path: bin, SystemRoot: String.raw`C:\Windows` },
+    fsImpl: { statSync: (file) => ({ isFile: () => file === npm || (installed && file === codex) }) },
+    execFileSyncImpl(command, args, options) {
+      assert.equal(command, String.raw`C:\Windows\System32\cmd.exe`);
+      assert.equal(options.windowsVerbatimArguments, true);
+      assert.ok(!args.join(" ").includes(bin));
+      if (Object.values(options.env).includes(npm)) {
+        if (args.at(-1).includes("--version")) return "11.6.2";
+        assert.ok(args.at(-1).includes("install -g @openai/codex@latest"));
+        installed = true;
+        return "";
+      }
+      assert.ok(Object.values(options.env).includes(codex));
+      return "codex-cli 0.120.0";
+    },
+    logger: { log() {}, warn() {} },
+  });
+  assert.deepEqual(result, { status: "installed", versionBefore: null, versionAfter: "0.120.0" });
+});
+
+test("bootstrap leaves an explicitly selected unavailable executable under user control", () => {
+  const commands = [];
+  const result = ensureCodexCLI({
+    platform: "linux", env: { REMODEX_CODEX_COMMAND: "/opt/separate/codex" },
+    execFileSyncImpl(command) { commands.push(command); throw new Error("missing"); },
+    logger: { log() {}, warn() {} },
+  });
+  assert.equal(result.status, "failed");
+  assert.deepEqual(commands, ["/opt/separate/codex"]);
+});

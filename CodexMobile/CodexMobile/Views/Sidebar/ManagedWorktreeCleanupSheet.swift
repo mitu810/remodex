@@ -66,7 +66,7 @@ struct ManagedWorktreeCleanupSheet: View {
 
     private func worktreeRow(_ worktree: GitManagedWorktree) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(URL(fileURLWithPath: worktree.path).deletingLastPathComponent().lastPathComponent)
+            Text((RemoteHostPath.slashPath(worktree.path) as NSString).deletingLastPathComponent.pathDisplayName)
                 .font(AppFont.body(weight: .semibold))
             Text(worktree.path)
                 .font(AppFont.footnote())

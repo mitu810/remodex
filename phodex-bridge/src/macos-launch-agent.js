@@ -9,7 +9,6 @@ const { createHash } = require("crypto");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { startBridge } = require("./bridge");
 const { readBridgeConfig } = require("./codex-desktop-refresher");
 const { printQR } = require("./qr");
 const { readBridgeDeviceState, resetBridgeTrustState } = require("./secure-device-state");
@@ -28,6 +27,8 @@ const {
   writeDaemonConfig,
   writePairingSession,
 } = require("./daemon-state");
+
+const { runBridgeService, mergeBridgeStatusForDaemon } = require('./service-runner');
 
 const SERVICE_LABEL = "com.remodex.bridge";
 const DEFAULT_PAIRING_WAIT_TIMEOUT_MS = 10_000;
@@ -53,33 +54,10 @@ function buildLaunchAgentProgramArguments({ nodePath, cliPath }) {
 // Runs the bridge inside launchd while keeping QR rendering in the foreground CLI command.
 function runMacOSBridgeService({ env = process.env, platform = process.platform } = {}) {
   assertDarwinPlatform(platform);
-  const config = readDaemonConfig({ env });
-  if (!config?.relayUrl) {
-    const message = "No relay URL configured for the macOS bridge service.";
-    // Clear any stale QR so the CLI does not keep showing a pairing payload for a dead service.
-    clearPairingSession({ env });
-    writeBridgeStatus({
-      state: "error",
-      connectionStatus: "error",
-      pid: process.pid,
-      lastError: message,
-    }, { env });
-    console.error(`[remodex] ${message}`);
-    return;
-  }
-
-  startBridge({
-    config,
-    printPairingQr: false,
-    onPairingSession(pairingSession) {
-      writePairingSession(pairingSession, { env });
-    },
-    onBridgeStatus(status) {
-      writeBridgeStatus(
-        mergeBridgeStatusForDaemon(status, readBridgeStatus({ env })),
-        { env }
-      );
-    },
+  return runBridgeService({
+    env,
+    useLock: false,
+    missingConfigMessage: "No relay URL configured for the macOS bridge service.",
   });
 }
 
@@ -101,7 +79,7 @@ async function startMacOSBridgeService({
   assertRelayConfigured(config);
   const startedAt = Date.now();
 
-  writeDaemonConfig(config, { env, fsImpl });
+  writeDaemonConfig({ ...config, serviceEnvironment: readDaemonConfig({ env, fsImpl })?.serviceEnvironment }, { env, fsImpl });
   clearPairingSession({ env, fsImpl });
   clearBridgeStatus({ env, fsImpl });
   ensureRemodexStateDir({ env, fsImpl, osImpl });
@@ -381,9 +359,16 @@ function writeLaunchAgentPlist({
   const stdoutLogPath = resolveBridgeStdoutLogPath({ env, osImpl });
   const stderrLogPath = resolveBridgeStderrLogPath({ env, osImpl });
   const homeDir = env.HOME || osImpl.homedir();
+  const daemonConfig = readDaemonConfig({ env, fsImpl }) || {};
+  const serviceEnvironment = { ...daemonConfig.serviceEnvironment };
+  for (const key of ['CODEX_HOME', 'REMODEX_CODEX_COMMAND', 'REMODEX_DEVICE_STATE_FILE']) {
+    if (typeof env[key] === 'string') serviceEnvironment[key] = env[key];
+  }
+  if (Object.keys(serviceEnvironment).length) writeDaemonConfig({ ...daemonConfig, serviceEnvironment }, { env, fsImpl });
   const serialized = buildLaunchAgentPlist({
     homeDir,
     pathEnv: env.PATH || "",
+    serviceEnvironment,
     stateDir,
     stdoutLogPath,
     stderrLogPath,
@@ -397,6 +382,7 @@ function writeLaunchAgentPlist({
 }
 
 function buildLaunchAgentPlist({
+  serviceEnvironment = {},
   homeDir,
   pathEnv,
   stateDir,
@@ -434,6 +420,7 @@ ${buildLaunchAgentProgramArguments({ nodePath, cliPath })
     <string>${escapeXml(pathEnv)}</string>
     <key>REMODEX_DEVICE_STATE_DIR</key>
     <string>${escapeXml(stateDir)}</string>
+${Object.entries(serviceEnvironment).map(([key, value]) => `    <key>${escapeXml(key)}</key>\n    <string>${escapeXml(value)}</string>`).join('\n')}
   </dict>
   <key>StandardOutPath</key>
   <string>${escapeXml(stdoutLogPath)}</string>
@@ -618,33 +605,6 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function mergeBridgeStatusForDaemon(nextStatus, persistedStatus) {
-  if (!nextStatus || typeof nextStatus !== "object") {
-    return nextStatus;
-  }
-
-  const lastError = normalizeNonEmptyString(nextStatus.lastError);
-  if (lastError || nextStatus.connectionStatus === "connected") {
-    return nextStatus;
-  }
-
-  if (
-    nextStatus.codexLaunchState !== "starting"
-    || (nextStatus.connectionStatus !== "starting" && nextStatus.connectionStatus !== "connecting")
-  ) {
-    return nextStatus;
-  }
-
-  const persistedError = normalizeNonEmptyString(persistedStatus?.lastError);
-  if (!persistedError) {
-    return nextStatus;
-  }
-
-  return {
-    ...nextStatus,
-    lastError: persistedError,
-  };
-}
 
 function normalizeNonEmptyString(value) {
   return typeof value === "string" && value.trim() ? value.trim() : "";

@@ -1,0 +1,301 @@
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { spawn, execFileSync } = require('node:child_process');
+
+function fixture(t) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'remodex native 中文 '));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  return { root, env: { HOME: root, PATH: '/custom/bin:/usr/bin', REMODEX_DEVICE_STATE_DIR: path.join(root, 'state'), REMODEX_RELAY: 'ws://localhost:9000/relay' } };
+}
+
+test('systemd unit preserves literal paths and bounds restart failures without shell expansion', () => {
+  const { buildSystemdUnit } = require('../src/linux-service');
+  const unit = buildSystemdUnit({ nodePath: '/node %n/$node', entryPath: '/repo/中文 "quote"/service-entry.js', stateDir: '/home/a/.remodex', homeDir: '/home/a' });
+  assert.ok(unit.includes('ExecStart=:"/node %%n/$node"'));
+  assert.ok(unit.includes('中文 \\"quote\\"'));
+  assert.match(unit, /Restart=on-failure/);
+  assert.match(unit, /StartLimitBurst=3/);
+  assert.match(unit, /RestartSec=10/);
+  assert.match(unit, /KillMode=control-group/);
+  assert.match(unit, /WantedBy=default.target/);
+  assert.match(unit, /^WorkingDirectory=~$/m);
+  assert.ok(unit.includes('ConditionPathExists=/repo/中文 "quote"/service-entry.js'));
+  assert.equal(unit.includes('/bin/sh'), false);
+});
+
+test('Linux systemd parses the generated unit without path or executable errors', { skip: process.platform !== 'linux' }, (t) => {
+  const { buildSystemdUnit } = require('../src/linux-service');
+  const { root } = fixture(t);
+  const unitPath = path.join(root, 'remodex-verify.service');
+  const entryPath = path.join(root, 'entry "quote" %n $node.js');
+  fs.writeFileSync(entryPath, '');
+  const nodePath = path.join(root, 'native $node %n');
+  fs.symlinkSync(process.execPath, nodePath);
+  fs.writeFileSync(unitPath, buildSystemdUnit({ nodePath, entryPath, stateDir: root, homeDir: root }));
+  execFileSync('systemd-analyze', ['verify', unitPath], { encoding: 'utf8', timeout: 10000 });
+});
+
+test('Windows task uses an interactive limited user, literal executable paths and bounded restarts', () => {
+  const { buildWindowsTaskScript } = require('../src/windows-service');
+  const script = buildWindowsTaskScript('install', { taskName: 'Remodex-test', nodePath: 'C:\\Program Files\\Node\\node.exe', entryPath: 'C:\\a & b\\服务\\service-entry.js', stateDir: 'C:\\Users\\a\\.remodex', homeDir: 'C:\\Users\\a' });
+  assert.match(script, /-LogonType Interactive/);
+  assert.match(script, /-RunLevel Limited/);
+  assert.match(script, /-MultipleInstances IgnoreNew/);
+  assert.match(script, /-RestartCount 3/);
+  assert.match(script, /-AtLogOn/);
+  assert.match(script, /-StartWhenAvailable/);
+  assert.equal(script.includes('C:\\a & b'), false, 'configuration must be encoded data, not PowerShell source');
+  assert.equal(script.includes('SYSTEM -'), false);
+});
+
+test('Task Scheduler action properties keep percent paths inside encoded launch data', () => {
+  const { buildWindowsTaskAction } = require('../src/windows-service');
+  const action = buildWindowsTaskAction({ nodePath: 'C:\\%PATH%\\node.exe', entryPath: 'C:\\a & b\\服务\\service-entry.js', stateDir: 'C:\\%USERNAME%\\state', homeDir: 'C:\\%USERNAME%' });
+  assert.equal(JSON.stringify(action).includes('%'), false);
+  assert.match(action.execute, /\\System32\\WindowsPowerShell\\v1\.0\\powershell\.exe$/);
+  const source = Buffer.from(action.arguments.split(' ').at(-1), 'base64').toString('utf16le');
+  assert.match(source, /& \$data.nodePath \$data.entryPath \$data.stateDir/);
+  const payload = source.match(/FromBase64String\('([^']+)'\)/)[1];
+  assert.equal(JSON.parse(Buffer.from(payload, 'base64').toString('utf8')).nodePath, 'C:\\%PATH%\\node.exe');
+});
+
+test('Windows task launcher executes literal percent and Unicode paths', { skip: process.platform !== 'win32' }, (t) => {
+  const { buildWindowsTaskAction, buildWindowsTaskScript } = require('../src/windows-service');
+  const { root } = fixture(t);
+  const directory = path.join(root, '%PATH% & 服务');
+  fs.mkdirSync(directory);
+  const nodePath = path.join(directory, 'node.exe');
+  try { fs.linkSync(process.execPath, nodePath); } catch { fs.copyFileSync(process.execPath, nodePath); }
+  const entryPath = path.join(directory, 'entry.js');
+  const stateDir = path.join(directory, '%USERNAME%');
+  fs.writeFileSync(entryPath, 'process.stdout.write(JSON.stringify(process.argv.slice(2)));');
+  const action = buildWindowsTaskAction({ nodePath, entryPath, stateDir });
+  const encoded = action.arguments.split(' ').at(-1);
+  const output = execFileSync(action.execute, ['-NoProfile', '-NonInteractive', '-EncodedCommand', encoded], { encoding: 'utf8', timeout: 15000 });
+  assert.deepEqual(JSON.parse(output), [stateDir]);
+  const script = buildWindowsTaskScript('install', { nodePath, entryPath, stateDir, taskName: 'parse-only' });
+  const { runPowerShell, powershellData } = require('../src/powershell');
+  runPowerShell(`${powershellData({ script })} $tokens = $null; $errors = $null; [Management.Automation.Language.Parser]::ParseInput($data.script, [ref]$tokens, [ref]$errors) | Out-Null; if ($errors.Count) { throw ($errors | Out-String); }`);
+});
+
+test('Linux start persists a minimal user environment and restart reuses the relay configuration', async (t) => {
+  const { createNativeBridgeService } = require('../src/native-bridge-service');
+  const { root, env } = fixture(t);
+  const calls = [];
+  const backend = { kind: 'systemd', definitionPath: path.join(root, 'unit'), install: () => calls.push('install'), start: () => calls.push('start'), stop: () => calls.push('stop'), remove: () => calls.push('remove'), status: () => ({ installed: true, running: false }) };
+  const service = createNativeBridgeService({ platform: 'linux', env: { ...env, CODEX_HOME: path.join(root, 'codex'), OPENAI_API_KEY: 'must-not-save', REMODEX_CODEX_COMMAND: '/bin/codex' }, backend });
+  await service.start();
+  const config = JSON.parse(fs.readFileSync(path.join(env.REMODEX_DEVICE_STATE_DIR, 'daemon-config.json')));
+  const manifest = JSON.parse(fs.readFileSync(path.join(env.REMODEX_DEVICE_STATE_DIR, 'service-environment.json')));
+  assert.equal(config.relayUrl, env.REMODEX_RELAY);
+  assert.equal(manifest.environment.PATH, env.PATH);
+  assert.equal(manifest.environment.CODEX_HOME, path.join(root, 'codex'));
+  assert.equal(manifest.environment.REMODEX_CODEX_COMMAND, '/bin/codex');
+  assert.equal(JSON.stringify(manifest).includes('must-not-save'), false);
+  assert.equal(manifest.cwd, root);
+  await createNativeBridgeService({ platform: 'linux', env: { ...env, REMODEX_RELAY: undefined }, backend }).restart();
+  assert.deepEqual(calls, ['install', 'start', 'stop', 'install', 'start']);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(env.REMODEX_DEVICE_STATE_DIR, 'daemon-config.json'))).relayUrl, env.REMODEX_RELAY);
+});
+
+test('service stop failure does not remove definitions or pairing state', async (t) => {
+  const { createNativeBridgeService } = require('../src/native-bridge-service');
+  const { env } = fixture(t);
+  fs.mkdirSync(env.REMODEX_DEVICE_STATE_DIR);
+  fs.writeFileSync(path.join(env.REMODEX_DEVICE_STATE_DIR, 'pairing-session.json'), '{}');
+  const backend = { kind: 'systemd', stop: () => { throw new Error('permission denied'); }, remove: () => assert.fail('must not remove after failed stop') };
+  const service = createNativeBridgeService({ platform: 'linux', env, backend });
+  await assert.rejects(service.uninstall(), /permission denied/);
+  assert.ok(fs.existsSync(path.join(env.REMODEX_DEVICE_STATE_DIR, 'pairing-session.json')));
+});
+
+test('service uninstall preserves saved configuration and identity', async (t) => {
+  const { createNativeBridgeService } = require('../src/native-bridge-service');
+  const { env } = fixture(t);
+  fs.mkdirSync(env.REMODEX_DEVICE_STATE_DIR);
+  for (const file of ['device-state.json', 'daemon-config.json', 'pairing-session.json', 'bridge-status.json']) fs.writeFileSync(path.join(env.REMODEX_DEVICE_STATE_DIR, file), '{}');
+  const calls = [];
+  const backend = { kind: 'systemd', stop: () => calls.push('stop'), remove: () => { calls.push('remove'); return { removed: true }; } };
+  const result = await createNativeBridgeService({ platform: 'linux', env, backend }).uninstall();
+  assert.equal(result.removed, true);
+  assert.deepEqual(calls, ['stop', 'remove']);
+  assert.ok(fs.existsSync(path.join(env.REMODEX_DEVICE_STATE_DIR, 'device-state.json')));
+  assert.ok(fs.existsSync(path.join(env.REMODEX_DEVICE_STATE_DIR, 'daemon-config.json')));
+  assert.equal(fs.existsSync(path.join(env.REMODEX_DEVICE_STATE_DIR, 'pairing-session.json')), false);
+});
+
+test('service status downgrades stale connected snapshots', (t) => {
+  const { createNativeBridgeService } = require('../src/native-bridge-service');
+  const { env } = fixture(t);
+  fs.mkdirSync(env.REMODEX_DEVICE_STATE_DIR);
+  fs.writeFileSync(path.join(env.REMODEX_DEVICE_STATE_DIR, 'bridge-status.json'), JSON.stringify({ connectionStatus: 'connected', updatedAt: '2000-01-01T00:00:00Z', pid: 4242 }));
+  const backend = { kind: 'systemd', status: () => ({ installed: true, running: false }) };
+  const status = createNativeBridgeService({ platform: 'linux', env, backend }).status();
+  assert.equal(status.bridgeStatus.connectionStatus, 'disconnected');
+  assert.equal(status.running, false);
+});
+
+test('daemon instance lock refuses live owners and recovers obsolete PID metadata', async (t) => {
+  const { acquireServiceLock } = require('../src/service-runner');
+  const { env } = fixture(t);
+  const lock = await acquireServiceLock({ env, processImpl: process });
+  await assert.rejects(acquireServiceLock({ env, processImpl: process }), /already running/);
+  await lock.release();
+  fs.writeFileSync(lock.path, JSON.stringify({ pid: process.pid, instanceId: 'old' }));
+  const recovered = await acquireServiceLock({ env, processImpl: process });
+  assert.notEqual(recovered.instanceId, 'old');
+  await recovered.release();
+});
+
+test('shared runner publishes fresh pairing and status without printing QR', async (t) => {
+  const { runBridgeService } = require('../src/service-runner');
+  const { env } = fixture(t);
+  fs.mkdirSync(env.REMODEX_DEVICE_STATE_DIR);
+  fs.writeFileSync(path.join(env.REMODEX_DEVICE_STATE_DIR, 'daemon-config.json'), JSON.stringify({ relayUrl: env.REMODEX_RELAY }));
+  const listeners = new Map();
+  const fakeProcess = { pid: process.pid, kill: process.kill.bind(process), once: (event, cb) => listeners.set(event, cb), emit: () => {} };
+  const runner = await runBridgeService({ env, processImpl: fakeProcess, startBridgeImpl(options) { assert.equal(options.printPairingQr, false); options.onPairingSession({ pairingPayload: { sessionId: 'secret' } }); options.onBridgeStatus({ state: 'running', connectionStatus: 'connected' }); } });
+  assert.equal(JSON.parse(fs.readFileSync(path.join(env.REMODEX_DEVICE_STATE_DIR, 'pairing-session.json'))).pairingPayload.sessionId, 'secret');
+  assert.equal(JSON.parse(fs.readFileSync(path.join(env.REMODEX_DEVICE_STATE_DIR, 'bridge-status.json'))).connectionStatus, 'connected');
+  await runner.dispose();
+});
+
+test('service QR waiting rejects expired payloads and accepts only a fresh session', async (t) => {
+  const { createNativeBridgeService } = require('../src/native-bridge-service');
+  const { writePairingSession } = require('../src/daemon-state');
+  const { env } = fixture(t);
+  let clock = 100000;
+  let polls = 0;
+  const backend = { install() {}, start() { writePairingSession({ pairingPayload: { sessionId: 'expired', expiresAt: clock - 1 } }, { env, now: () => clock }); }, status: () => ({ running: false }) };
+  const result = await createNativeBridgeService({ platform: 'linux', env, backend, now: () => clock, sleep: async () => { polls++; clock += 200; writePairingSession({ pairingPayload: { sessionId: 'fresh', expiresAt: clock + 10000 } }, { env, now: () => clock }); } }).start({ waitForPairing: true });
+  assert.equal(polls, 1);
+  assert.equal(result.pairingSession.pairingPayload.sessionId, 'fresh');
+});
+
+test('a running foreground bridge is not overwritten by a background start', async (t) => {
+  const { createNativeBridgeService } = require('../src/native-bridge-service');
+  const { acquireServiceLock } = require('../src/service-runner');
+  const { env } = fixture(t);
+  const lock = await acquireServiceLock({ env });
+  t.after(() => lock.release());
+  const backend = { status: () => ({ running: false }), install: () => assert.fail('must not install over a foreground bridge') };
+  await assert.rejects(createNativeBridgeService({ platform: 'linux', env, backend }).start(), /already running/);
+  assert.equal(fs.existsSync(path.join(env.REMODEX_DEVICE_STATE_DIR, 'daemon-config.json')), false);
+});
+
+test('foreground runs share the daemon ownership lock and release it on startup failure', async (t) => {
+  const { runForegroundBridge, acquireServiceLock } = require('../src/service-runner');
+  const { env } = fixture(t);
+  const processImpl = { ...process, once() {} };
+  await assert.rejects(runForegroundBridge({ env, processImpl, startBridgeImpl() { throw new Error('launch failed'); } }), /launch failed/);
+  const lock = await acquireServiceLock({ env });
+  await lock.release();
+  const runner = await runForegroundBridge({ env, processImpl, startBridgeImpl() {} });
+  await assert.rejects(acquireServiceLock({ env }), /already running/);
+  await runner.dispose();
+});
+
+test('library startBridge preserves the original synchronous stop handle contract', () => {
+  assert.equal(require('../src').startBridge, require('../src/bridge').startBridge);
+});
+
+for (const mode of ['service', 'foreground']) {
+test(`native ${mode} runner pairs and stops a real subprocess without OS registration`, { timeout: 15000 }, async (t) => {
+  const { createNativeBridgeService } = require('../src/native-bridge-service');
+  const { env, root } = fixture(t);
+  const scriptPath = path.join(root, 'fake bridge 服务.cjs');
+  const runnerModule = path.resolve(__dirname, '../src/service-runner.js');
+  fs.writeFileSync(scriptPath, `
+    const { runBridgeService, runForegroundBridge } = require(${JSON.stringify(runnerModule)});
+    const state = require(${JSON.stringify(path.resolve(__dirname, '../src/daemon-state.js'))});
+    const run = ${mode === 'service' ? 'runBridgeService' : 'runForegroundBridge'};
+    run({ startBridgeImpl(options) {
+      (options.onPairingSession || state.writePairingSession)({ pairingPayload: { sessionId: 'test-session', expiresAt: Date.now() + 60000 } });
+      (options.onBridgeStatus || state.writeBridgeStatus)({ state: 'running', connectionStatus: 'connected', pid: process.pid });
+      setInterval(() => {}, 1000);
+      process.on('SIGTERM', () => process.exit(0));
+    }}).catch((error) => { console.error(error); process.exit(1); });
+  `);
+  let child;
+  let closed;
+  const backend = {
+    install() {},
+    start() {
+      child = spawn(process.execPath, [scriptPath], { env: { ...process.env, ...env }, stdio: 'pipe' });
+      closed = new Promise((resolve, reject) => { child.once('error', reject); child.once('close', (code) => resolve(code)); });
+    },
+    stop() {},
+    status: () => ({ installed: true, running: Boolean(child && child.exitCode === null) }),
+  };
+  t.after(() => { if (child && child.exitCode === null) child.kill(); });
+  const service = createNativeBridgeService({ platform: 'linux', env, backend });
+  const result = await service.start({ waitForPairing: true });
+  assert.equal(result.pairingSession.pairingPayload.sessionId, 'test-session');
+  assert.equal(service.status().bridgeStatus.connectionStatus, 'connected');
+  await service.stop();
+  assert.equal(await closed, 0);
+  assert.equal(fs.existsSync(path.join(env.REMODEX_DEVICE_STATE_DIR, 'service-lock.json')), false);
+  assert.equal(fs.existsSync(path.join(env.REMODEX_DEVICE_STATE_DIR, 'pairing-session.json')), false);
+  assert.ok(fs.existsSync(path.join(env.REMODEX_DEVICE_STATE_DIR, 'daemon-config.json')));
+});
+
+}
+
+test('service entry exits cleanly after its saved configuration is removed', (t) => {
+  const { root } = fixture(t);
+  execFileSync(process.execPath, [path.resolve(__dirname, '../src/service-entry.js'), root], { timeout: 5000 });
+});
+
+test('fresh-shell start preserves installed runtime, endpoint and identity settings', async (t) => {
+  const { createNativeBridgeService } = require('../src/native-bridge-service');
+  const { root, env } = fixture(t);
+  const backend = { install() {}, start() {}, stop() {}, status: () => ({ running: false }) };
+  await createNativeBridgeService({ platform: 'linux', env: { ...env, CODEX_HOME: path.join(root, 'codex'), REMODEX_CODEX_COMMAND: '/custom/codex', REMODEX_DEVICE_STATE_FILE: path.join(root, 'identity.json'), REMODEX_CODEX_ENDPOINT: 'ws://127.0.0.1:4500' }, backend }).start();
+  await createNativeBridgeService({ platform: 'linux', env, backend }).start();
+  const manifest = JSON.parse(fs.readFileSync(path.join(env.REMODEX_DEVICE_STATE_DIR, 'service-environment.json')));
+  const config = JSON.parse(fs.readFileSync(path.join(env.REMODEX_DEVICE_STATE_DIR, 'daemon-config.json')));
+  assert.equal(manifest.environment.CODEX_HOME, path.join(root, 'codex'));
+  assert.equal(manifest.environment.REMODEX_DEVICE_STATE_FILE, path.join(root, 'identity.json'));
+  assert.equal(manifest.environment.REMODEX_CODEX_COMMAND, '/custom/codex');
+  assert.equal(config.codexEndpoint, 'ws://127.0.0.1:4500');
+});
+
+test('reset refuses to report success while a foreground owner remains alive', async (t) => {
+  const { createNativeBridgeService } = require('../src/native-bridge-service');
+  const { acquireServiceLock } = require('../src/service-runner');
+  const { env } = fixture(t);
+  const lock = await acquireServiceLock({ env });
+  t.after(() => lock.release());
+  let clock = 0;
+  const pairingPath = path.join(env.REMODEX_DEVICE_STATE_DIR, 'pairing-session.json');
+  fs.writeFileSync(pairingPath, '{}');
+  const service = createNativeBridgeService({ platform: 'linux', env, backend: { stop() {} }, stopTimeoutMs: 100, now: () => clock, sleep: async () => { clock += 100; } });
+  await assert.rejects(service.resetPairing(), /still running|did not stop/);
+  assert.ok(fs.existsSync(pairingPath));
+});
+
+test('reset uses the installed custom identity file and preserves its device key', async (t) => {
+  const { createNativeBridgeService } = require('../src/native-bridge-service');
+  const { root, env } = fixture(t);
+  const backend = { install() {}, start() {}, stop() {}, status: () => ({ running: false }) };
+  const identityPath = path.join(root, 'custom-identity.json');
+  await createNativeBridgeService({ platform: 'linux', env: { ...env, REMODEX_DEVICE_STATE_FILE: identityPath }, backend }).start();
+  fs.writeFileSync(identityPath, JSON.stringify({ version: 1, macDeviceId: 'host', macIdentityPublicKey: 'pub', macIdentityPrivateKey: 'priv', trustedPhones: { phone: 'key' } }));
+  await createNativeBridgeService({ platform: 'linux', env, backend }).resetPairing();
+  const identity = JSON.parse(fs.readFileSync(identityPath));
+  assert.deepEqual(identity.trustedPhones, {});
+  assert.equal(identity.macIdentityPrivateKey, 'priv');
+});
+
+test('management operations cannot interleave service configuration and QR writes', async (t) => {
+  const { createNativeBridgeService } = require('../src/native-bridge-service');
+  const { acquireServiceLock } = require('../src/service-runner');
+  const { env } = fixture(t);
+  const operation = await acquireServiceLock({ env, scope: 'management' });
+  t.after(() => operation.release());
+  const service = createNativeBridgeService({ platform: 'linux', env, backend: { install: () => assert.fail('must not change service during another lifecycle operation') } });
+  await assert.rejects(service.start(), /already|progress/);
+});

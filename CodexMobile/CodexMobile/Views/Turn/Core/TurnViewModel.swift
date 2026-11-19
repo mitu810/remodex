@@ -3292,7 +3292,7 @@ final class TurnViewModel {
                         }
                     } else if result.state == "dirty_and_behind" {
                         gitSyncAlert = TurnGitSyncAlert(
-                            title: "Local changes need attention",
+                            title: String(localized: "Local changes need attention"),
                             message: "You have local changes and the remote branch moved ahead. Pull with rebase only if you're ready to reconcile those changes.",
                             action: .pullRebase
                         )
@@ -3307,7 +3307,7 @@ final class TurnViewModel {
                     if let status = result.status { applyGitRepoSync(status) }
                     presentGitActionSuccess(.init(
                         kind: .commit,
-                        title: "Committed",
+                        title: String(localized: "Committed"),
                         subtitle: result.status?.currentBranch
                     ))
 
@@ -3325,7 +3325,7 @@ final class TurnViewModel {
                     )
                     presentGitActionSuccess(.init(
                         kind: .push,
-                        title: "Pushed",
+                        title: String(localized: "Pushed"),
                         subtitle: result.status?.currentBranch
                     ))
 
@@ -3333,7 +3333,7 @@ final class TurnViewModel {
                     guard gitRepoSync?.hasPushRemote == true else {
                         throw GitActionsError.bridgeError(
                             code: "no_remote",
-                            message: "Add a Git remote before using Commit & Push."
+                            message: String(localized: "Add a Git remote before using Commit & Push.")
                         )
                     }
                     let result = try await runStackedGitAction(
@@ -3344,7 +3344,7 @@ final class TurnViewModel {
                     handleSuccessfulStackedGitAction(result, codex: codex, workingDirectory: workingDirectory, threadID: threadID)
                     presentGitActionSuccess(.init(
                         kind: .push,
-                        title: "Commit & push complete",
+                        title: String(localized: "Commit & push complete"),
                         subtitle: result.status?.currentBranch
                     ))
 
@@ -3357,7 +3357,7 @@ final class TurnViewModel {
                     handleSuccessfulStackedGitAction(result, codex: codex, workingDirectory: workingDirectory, threadID: threadID)
                     presentGitActionSuccess(.init(
                         kind: .pullRequest(url: result.pullRequest.url),
-                        title: "Pull request opened",
+                        title: String(localized: "Pull request opened"),
                         subtitle: result.pullRequest.url
                     ))
 
@@ -3373,7 +3373,7 @@ final class TurnViewModel {
                     handleSuccessfulStackedGitAction(result, codex: codex, workingDirectory: workingDirectory, threadID: threadID)
                     presentGitActionSuccess(.init(
                         kind: .pullRequest(url: result.pullRequest.url),
-                        title: "Pull request opened",
+                        title: String(localized: "Pull request opened"),
                         subtitle: result.pullRequest.url
                     ))
 
@@ -3386,11 +3386,11 @@ final class TurnViewModel {
                         unpushedCommitWarning = ""
                     }
                     gitSyncAlert = TurnGitSyncAlert(
-                        title: "Discard local changes?",
+                        title: String(localized: "Discard local changes?"),
                         message: "This resets the current branch to match the remote and removes local uncommitted changes.\(unpushedCommitWarning) This cannot be undone from the app.",
                         buttons: [
-                            TurnGitSyncAlertButton(title: "Cancel", role: .cancel, action: .dismissOnly),
-                            TurnGitSyncAlertButton(title: "Discard Changes", role: .destructive, action: .discardRuntimeChanges)
+                            TurnGitSyncAlertButton(title: String(localized: "Cancel"), role: .cancel, action: .dismissOnly),
+                            TurnGitSyncAlertButton(title: String(localized: "Discard Changes"), role: .destructive, action: .discardRuntimeChanges)
                         ]
                     )
                 }
@@ -3400,14 +3400,14 @@ final class TurnViewModel {
                     isShowingNothingToCommitAlert = true
                 default:
                     gitSyncAlert = TurnGitSyncAlert(
-                        title: "Git Error",
+                        title: String(localized: "Git Error"),
                         message: error.errorDescription ?? "Operation failed.",
                         action: .dismissOnly
                     )
                 }
             } catch {
                 gitSyncAlert = TurnGitSyncAlert(
-                    title: "Git Error",
+                    title: String(localized: "Git Error"),
                     message: error.localizedDescription,
                     action: .dismissOnly
                 )
@@ -3445,7 +3445,7 @@ final class TurnViewModel {
                 )
                 presentGitActionSuccess(.init(
                     kind: .push,
-                    title: "Commit & push complete",
+                    title: String(localized: "Commit & push complete"),
                     subtitle: result.status?.currentBranch
                 ))
             } catch let error as GitActionsError {
@@ -3454,14 +3454,14 @@ final class TurnViewModel {
                     isShowingNothingToCommitAlert = true
                 default:
                     gitSyncAlert = TurnGitSyncAlert(
-                        title: "Git Error",
+                        title: String(localized: "Git Error"),
                         message: error.errorDescription ?? "Operation failed.",
                         action: .dismissOnly
                     )
                 }
             } catch {
                 gitSyncAlert = TurnGitSyncAlert(
-                    title: "Git Error",
+                    title: String(localized: "Git Error"),
                     message: error.localizedDescription,
                     action: .dismissOnly
                 )
@@ -3477,7 +3477,7 @@ final class TurnViewModel {
         model: String?
     ) async throws -> GitStackedActionResult {
         guard let actionIdentifier = action.stackedActionIdentifier else {
-            throw GitActionsError.bridgeError(code: "invalid_git_action", message: "Unsupported Git action.")
+            throw GitActionsError.bridgeError(code: "invalid_git_action", message: String(localized: "Unsupported Git action."))
         }
 
         let baseBranch = gitDefaultBranch.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty

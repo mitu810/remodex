@@ -21,7 +21,7 @@ nonisolated enum TurnMessageRegexCache {
     static let markdownLinkToken = try? NSRegularExpression(pattern: #"^\[([^\]]+)\]\(([^)]+)\)$"#)
     static let heading = try? NSRegularExpression(pattern: #"(?m)^#{1,6}\s+(.+)$"#)
     static let genericPath = try? NSRegularExpression(
-        pattern: #"(?:\/[^\s`"'<>]+|~\/[^\s`"'<>]+|\.{1,2}\/[^\s`"'<>]+|[A-Za-z0-9._+\-]+(?:\/[A-Za-z0-9._+\-]+)+)(?::\d+(?::\d+)?)?"#
+        pattern: #"(?:(?<![A-Za-z0-9+.-])[A-Za-z]:[\\/](?![\\/])[^\s`"'<>]+|\\\\[^\s`"'<>]+|\/[^\s`"'<>]+|~\/[^\s`"'<>]+|\.{1,2}\/[^\s`"'<>]+|[A-Za-z0-9._+\-]+(?:\/[A-Za-z0-9._+\-]+)+)(?::\d+(?::\d+)?)?"#
     )
     static let inlineCodeContent = try? NSRegularExpression(pattern: #"`([^`\n]+)`"#)
     static let markdownLinkRange = try? NSRegularExpression(pattern: #"\[[^\]]+\]\([^)]+\)"#)

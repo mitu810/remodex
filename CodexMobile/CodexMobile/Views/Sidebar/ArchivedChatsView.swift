@@ -71,7 +71,7 @@ struct ArchivedChatsView: View {
                 threadPendingDeletion = nil
             }
         } message: {
-            Text("This only removes the chat from Remodex on this phone. Nothing is removed from your Mac.")
+            Text("This only removes the chat from Remodex on this phone. Nothing is removed from your computer.")
         }
         .alert("Could not load archived chats", isPresented: Binding(
             get: { loadErrorMessage != nil },

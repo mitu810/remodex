@@ -36,10 +36,10 @@ Opening a PR does not create an obligation on my side. I may close it. I may ign
 
 ### Prerequisites
 
-- **Node.js** v18+
+- **Node.js** v20.8+
 - **[Codex CLI](https://github.com/openai/codex)** installed and working
 - **[Codex desktop app](https://openai.com/index/codex/)** (optional — for viewing threads on Mac)
-- **macOS** (required for desktop refresh; core bridge works on any OS)
+- **macOS, Windows or Linux** for bridge development; macOS for the iOS build and AppleScript refresh
 - **Xcode 16+** (only for building the iOS app)
 - **iPhone** with the Remodex app (or built from source)
 
@@ -54,23 +54,13 @@ cd remodex
 ./run-local-remodex.sh
 ```
 
+The launcher is a macOS convenience path. Native Windows/Linux setup is documented in [Docs/self-hosting.md](Docs/self-hosting.md); Windows does not use WSL.
+
 This launcher:
 1. Spawns a Codex `app-server` process
 2. Starts a local relay on `/relay/{sessionId}`
 3. Points the bridge at that relay
 4. Prints a QR code in your terminal for the initial trust bootstrap
-
-For a temporary public tunnel to that local relay, start the tunnel in one terminal:
-
-```sh
-cloudflared tunnel --url http://127.0.0.1:9000
-```
-
-Then pass the generated URL to the launcher in another terminal:
-
-```sh
-./run-local-remodex.sh --relay-url https://<random>.trycloudflare.com
-```
 
 If you only want the bridge process:
 
@@ -83,7 +73,7 @@ REMODEX_RELAY="ws://localhost:9000/relay" npm start
 That runs `remodex up`, which:
 1. Spawns a Codex `app-server` process
 2. Connects to the configured relay
-3. On macOS, starts the built-in background bridge service
+3. Starts the native background bridge service (launchd, a Windows user task, or systemd --user)
 4. Prints a QR code in your terminal when first-time pairing or recovery is needed
 
 Scan the QR code with the Remodex iOS app to trust that Mac.
@@ -164,6 +154,12 @@ remodex/
 │   └── BuildSupport/       # Build support files
 ```
 
+### Native bridge checks
+
+`npm test` in `phodex-bridge` runs the Node suite. Use `node --test --test-concurrency=1 ./test/*.test.js` if parallel Swift harness compilation overloads your Mac. These Foundation harnesses do not run Xcode tests. Run `npm test` in `relay` for the transport suite.
+
+CI runs the full bridge suite on Linux and targeted native runtime/service suites on Windows and macOS. Linux also validates the generated unit with `systemd-analyze verify`. These checks do not replace actual Windows/Linux phone pairing, service startup, reboot and reconnect validation.
+
 ### Code style
 
 - **Bridge**: CommonJS, no transpilation, no TypeScript. Keep it simple.
@@ -176,4 +172,4 @@ remodex/
 - After that first handshake, the iPhone stores a trusted Mac record and can ask the relay for the Mac's current live session again.
 - Set `REMODEX_RELAY` to a relay you control when you are not using the local launcher, or pass the relay URL to the launcher with `--relay-url`. Use `wss://` when you want TLS in transit.
 - Remodex uses an authenticated end-to-end encrypted transport after pairing completes. The relay code is public for inspection, but deployed relay details should stay in private config.
-- The built-in daemon / background service path is currently macOS-only. Linux and Windows can still run the bridge, but contributors should treat the daemon logic as platform-specific.
+- Background registration is platform-specific: preserve launchd behavior, use a current-user Windows task, and use systemd --user on Linux. Keep coordination in the shared service layer. Test adapters without registering real services; reserve live registration and phone pairing for explicit host validation.

@@ -25,9 +25,38 @@ enum CodexSecureKeys {
     nonisolated static let terminalSSHPrivateKey = "codex.terminal.sshPrivateKey"
     nonisolated static let terminalSSHPrivateKeyPassphrase = "codex.terminal.sshPrivateKeyPassphrase"
     nonisolated static let terminalSSHKnownHostPrefix = "codex.terminal.sshKnownHost"
+    nonisolated static let accountCredentialVault = "codex.local.accountCredentialVault"
 }
 
 enum SecureStore {
+    nonisolated static func readPrivateData(for key: String) throws -> Data? {
+        var query = baseQuery(for: key)
+        query[kSecReturnData as String] = kCFBooleanTrue
+        var result: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        if status == errSecItemNotFound { return nil }
+        guard status == errSecSuccess, let data = result as? Data else {
+            throw NSError(domain: NSOSStatusErrorDomain, code: Int(status))
+        }
+        return data
+    }
+
+    // Updates the vault without deleting the previous entry if Keychain rejects the write.
+    nonisolated static func writeDeviceOnlyData(_ data: Data, for key: String) throws {
+        let query = baseQuery(for: key)
+        let attributes = [
+            kSecValueData as String: data,
+            kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
+        ] as [String: Any]
+        var status = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
+        if status == errSecItemNotFound {
+            status = SecItemAdd(query.merging(attributes) { _, value in value } as CFDictionary, nil)
+        }
+        guard status == errSecSuccess else {
+            throw NSError(domain: NSOSStatusErrorDomain, code: Int(status))
+        }
+    }
+
     // Reads a UTF-8 string value from Keychain.
     nonisolated static func readString(for key: String) -> String? {
         var query = baseQuery(for: key)

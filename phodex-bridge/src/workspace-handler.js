@@ -24,6 +24,8 @@ const GIT_TIMEOUT_MS = 30_000;
 const MAX_IMAGE_READ_BYTES = 8 * 1024 * 1024;
 const MAX_IMAGE_PREVIEW_READ_BYTES = 2 * 1024 * 1024;
 const MAX_TEXT_FILE_READ_BYTES = 2 * 1024 * 1024;
+const MAX_FILE_DOWNLOAD_BYTES = 100 * 1024 * 1024;
+const FILE_DOWNLOAD_CHUNK_BYTES = 1024 * 1024;
 const BINARY_SNIFF_BYTES = 8 * 1024;
 const MAX_BASENAME_FALLBACK_MATCHES = 2;
 const MIN_IMAGE_PREVIEW_PIXEL_DIMENSION = 128;
@@ -45,7 +47,7 @@ const IMAGE_MIME_TYPES_BY_EXTENSION = new Map([
 const GIT_EXEC_MAX_BUFFER_BYTES = 50 * 1024 * 1024;
 const repoMutationLocks = new Map();
 
-function handleWorkspaceRequest(rawMessage, sendResponse) {
+function handleWorkspaceRequest(rawMessage, sendResponse, captureFileChunkSender = () => sendResponse) {
   let parsed;
   try {
     parsed = JSON.parse(rawMessage);
@@ -60,15 +62,16 @@ function handleWorkspaceRequest(rawMessage, sendResponse) {
 
   const id = parsed.id;
   const params = parsed.params || {};
+  const reply = method === "workspace/readFileChunk" ? captureFileChunkSender() : sendResponse;
 
   handleWorkspaceMethod(method, params)
     .then((result) => {
-      sendResponse(JSON.stringify({ id, result }));
+      reply(JSON.stringify({ id, result }));
     })
     .catch((err) => {
       const errorCode = err.errorCode || "workspace_error";
       const message = err.userMessage || err.message || "Unknown workspace error";
-      sendResponse(
+      reply(
         JSON.stringify({
           id,
           error: {
@@ -89,6 +92,9 @@ async function handleWorkspaceMethod(method, params) {
   }
   if (method === "workspace/readFile") {
     return workspaceReadFile(params);
+  }
+  if (method === "workspace/readFileChunk") {
+    return workspaceReadFileChunk(params);
   }
 
   const cwd = await resolveWorkspaceCwd(params);
@@ -118,8 +124,7 @@ async function handleWorkspaceMethod(method, params) {
   }
 }
 
-// Reads a UTF-8 text file from the active workspace for the phone-side read-only viewer.
-async function workspaceReadFile(params) {
+async function resolveWorkspaceReadableFile(params) {
   const requestedPath = firstNonEmptyString([params.path, params.filePath, params.localPath]);
   if (!requestedPath) {
     throw workspaceError("missing_file_path", "The request must include a file path.");
@@ -127,13 +132,19 @@ async function workspaceReadFile(params) {
 
   const cwd = await resolveWorkspaceCwd(params);
   const realWorkspaceRoot = await resolveReadableWorkspaceRoot(cwd);
-  const realFilePath = await resolveWorkspaceTextFilePath(cwd, requestedPath, realWorkspaceRoot);
+  const realFilePath = await resolveWorkspaceFilePath(cwd, requestedPath, realWorkspaceRoot);
   if (!realFilePath) {
     throw workspaceError("file_not_found", "The file no longer exists on this Mac.");
   }
   if (!realWorkspaceRoot || !isPathInside(realFilePath, realWorkspaceRoot)) {
     throw workspaceError("file_path_not_allowed", "Only files in the current workspace can be viewed.");
   }
+  return realFilePath;
+}
+
+// Reads a UTF-8 text file from the active workspace for the phone-side read-only viewer.
+async function workspaceReadFile(params) {
+  const realFilePath = await resolveWorkspaceReadableFile(params);
 
   const stat = await fs.promises.stat(realFilePath);
   if (!stat.isFile()) {
@@ -170,6 +181,63 @@ async function workspaceReadFile(params) {
     content,
     lineCount: countLines(content),
   };
+}
+
+// Reads original bytes in bounded chunks. A version check prevents mixing
+// bytes from different versions when a local process edits or replaces the file.
+async function workspaceReadFileChunk(params) {
+  const { offset, fileVersion: expectedVersion } = params;
+  if (!Number.isSafeInteger(offset) || offset < 0) {
+    throw workspaceError("invalid_file_offset", "The requested download offset is invalid.");
+  }
+
+  const realFilePath = await resolveWorkspaceReadableFile(params);
+  const original = await fs.promises.lstat(realFilePath, { bigint: true });
+  if (!original.isFile()) {
+    throw workspaceError("file_not_found", "The path is not a file.");
+  }
+
+  const fileVersion = downloadFileVersion(original);
+  if ((offset !== 0 || expectedVersion != null) && expectedVersion !== fileVersion) {
+    throw changedDownloadFileError();
+  }
+  if (original.size > BigInt(MAX_FILE_DOWNLOAD_BYTES)) {
+    throw workspaceError("file_too_large", "Downloads are limited to 100 MB per file.");
+  }
+  const byteLength = Number(original.size);
+  if (offset > byteLength) {
+    throw workspaceError("invalid_file_offset", "The requested download offset is invalid.");
+  }
+
+  const flags = fs.constants.O_RDONLY | (process.platform === "win32"
+    ? 0 : fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+  const file = await fs.promises.open(realFilePath, flags);
+  try {
+    if (downloadFileVersion(await file.stat({ bigint: true })) !== fileVersion) {
+      throw changedDownloadFileError();
+    }
+    const data = Buffer.allocUnsafe(Math.min(FILE_DOWNLOAD_CHUNK_BYTES, byteLength - offset));
+    let position = 0;
+    while (position < data.length) {
+      const { bytesRead } = await file.read(data, position, data.length - position, offset + position);
+      if (bytesRead === 0) throw changedDownloadFileError();
+      position += bytesRead;
+    }
+    if (downloadFileVersion(await file.stat({ bigint: true })) !== fileVersion) {
+      throw changedDownloadFileError();
+    }
+    return { fileName: path.basename(realFilePath), byteLength, fileVersion, offset, data: data.toString("base64") };
+  } finally {
+    await file.close();
+  }
+}
+
+function downloadFileVersion(stat) {
+  return [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].join(":");
+}
+
+function changedDownloadFileError() {
+  return workspaceError("file_changed", "The file changed during download. Try again.");
 }
 
 // Reads recognized local image files from the bound repo, Codex image cache, or host temp screenshot folders.
@@ -355,7 +423,7 @@ async function resolveImageWorkspaceRoot(cwd) {
 }
 
 // Handles assistant links that only include a filename by finding one unique workspace match.
-async function resolveWorkspaceTextFilePath(cwd, requestedPath, realWorkspaceRoot) {
+async function resolveWorkspaceFilePath(cwd, requestedPath, realWorkspaceRoot) {
   const filePath = path.isAbsolute(requestedPath)
     ? path.resolve(requestedPath)
     : path.resolve(cwd, requestedPath);

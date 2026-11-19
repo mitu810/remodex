@@ -4,7 +4,8 @@
 // Exports: bridge lifecycle, pairing reset, thread resume/watch, and macOS service helpers.
 // Depends on: ./bridge, ./secure-device-state, ./session-state, ./rollout-watch, ./macos-launch-agent
 
-const { startBridge } = require("./bridge");
+const { runForegroundBridge, runBridgeService } = require('./service-runner');
+const { createNativeBridgeService } = require('./native-bridge-service');
 const { readBridgeDeviceState, resetBridgeTrustState } = require("./secure-device-state");
 const { openLastActiveThread } = require("./session-state");
 const { watchThreadRollout } = require("./rollout-watch");
@@ -29,7 +30,10 @@ module.exports = {
   readBridgeDeviceState,
   resetMacOSBridgePairing,
   restartMacOSBridgeService,
-  startBridge,
+  startBridge: require('./bridge').startBridge,
+  runForegroundBridge,
+  runBridgeService,
+  createNativeBridgeService,
   runMacOSBridgeService,
   startMacOSBridgeService,
   stopMacOSBridgeService,

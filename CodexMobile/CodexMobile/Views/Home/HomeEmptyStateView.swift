@@ -147,31 +147,31 @@ struct HomeEmptyStateView<AuthSection: View, Footer: View>: View {
     private var statusLabel: String {
         switch connectionPhase {
         case .connecting:
-            guard let connectionAttemptStartedAt else { return "Connecting" }
+            guard let connectionAttemptStartedAt else { return String(localized: "Connecting") }
             let elapsed = Date().timeIntervalSince(connectionAttemptStartedAt)
-            if elapsed >= 12 { return "Still connecting…" }
-            return "Connecting"
+            if elapsed >= 12 { return String(localized: "Still connecting…") }
+            return String(localized: "Connecting")
         case .loadingChats:
-            return "Loading chats"
+            return String(localized: "Loading chats")
         case .syncing:
-            return "Syncing"
+            return String(localized: "Syncing")
         case .connected:
-            return "Connected"
+            return String(localized: "Connected")
         case .offline:
-            return "Offline"
+            return String(localized: "Offline")
         }
     }
 
     private var primaryButtonTitle: String {
         switch connectionPhase {
         case .connecting:
-            return "Reconnecting..."
+            return String(localized: "Reconnecting...")
         case .loadingChats:
-            return "Loading chats..."
+            return String(localized: "Loading chats...")
         case .syncing:
-            return "Syncing..."
+            return String(localized: "Syncing...")
         case .connected:
-            return "Disconnect"
+            return String(localized: "Disconnect")
         case .offline:
             return offlinePrimaryButtonTitle
         }

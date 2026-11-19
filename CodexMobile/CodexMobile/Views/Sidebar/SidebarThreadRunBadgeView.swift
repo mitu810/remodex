@@ -21,15 +21,15 @@ struct SidebarThreadRunBadgeView: View {
                 .accessibilityHidden(false)
                 .accessibilityLabel("Running")
         case .waitingOnUser:
-            statusDot(color: .yellow, label: "Waiting for your response")
+            statusDot(color: .yellow, label: String(localized: "Waiting for your response"))
         case .ready:
-            statusDot(color: .blue, label: "Finished, not opened yet")
+            statusDot(color: .blue, label: String(localized: "Finished, not opened yet"))
         case .failed:
-            statusDot(color: .red, label: "Last run failed")
+            statusDot(color: .red, label: String(localized: "Last run failed"))
         case .goalActive:
-            statusDot(color: .teal, label: "Goal running")
+            statusDot(color: .teal, label: String(localized: "Goal running"))
         case .goalAttention:
-            statusDot(color: .orange, label: "Goal needs attention")
+            statusDot(color: .orange, label: String(localized: "Goal needs attention"))
         }
     }
 

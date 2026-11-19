@@ -51,11 +51,11 @@ struct TerminalConnectionEditorSheet: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
-                    TerminalEditorSection(title: "Connection") {
+                    TerminalEditorSection(title: String(localized: "Connection")) {
                         TerminalConnectionStringField(connection: $connection)
                     }
 
-                    TerminalEditorSection(title: "Nickname") {
+                    TerminalEditorSection(title: String(localized: "Nickname")) {
                         TerminalRoundedTextField(
                             placeholder: "Nickname",
                             text: $profile.nickname
@@ -130,13 +130,13 @@ private struct TerminalAuthenticationSection: View {
     @Binding var isShowingKeyEditor: Bool
 
     var body: some View {
-        TerminalEditorSection(title: "Authentication") {
+        TerminalEditorSection(title: String(localized: "Authentication")) {
             VStack(spacing: 0) {
-                TerminalEditorRow(title: "Method", value: "SSH Key")
+                TerminalEditorRow(title: String(localized: "Method"), value: String(localized: "SSH Key"))
                 Divider()
                 Button(action: toggleKeyEditor) {
                     TerminalEditorRow(
-                        title: "SSH Key",
+                        title: String(localized: "SSH Key"),
                         value: keyLabel,
                         showsChevron: true
                     )
@@ -173,7 +173,7 @@ private struct TerminalSSHSection: View {
             VStack(spacing: 0) {
                 Button(action: toggleAdvanced) {
                     TerminalEditorRow(
-                        title: "Advanced Configuration",
+                        title: String(localized: "Advanced Configuration"),
                         value: advancedLabel,
                         showsChevron: true
                     )
@@ -183,7 +183,7 @@ private struct TerminalSSHSection: View {
                 if isAdvancedVisible {
                     Divider()
                     TerminalTextField(
-                        title: "Port",
+                        title: String(localized: "Port"),
                         text: portBinding,
                         placeholder: "22",
                         keyboardType: .numberPad
@@ -196,7 +196,7 @@ private struct TerminalSSHSection: View {
                     isConfirmingKnownHostReset = true
                 } label: {
                     TerminalEditorRow(
-                        title: "Known Host",
+                        title: String(localized: "Known Host"),
                         value: "Reset"
                     )
                 }

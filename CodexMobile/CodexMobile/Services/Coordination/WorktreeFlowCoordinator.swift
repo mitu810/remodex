@@ -313,15 +313,14 @@ enum WorktreeFlowCoordinator {
             return nil
         }
 
-        let resolvedProjectPath = canonicalProjectPath(normalizedProjectPath) ?? normalizedProjectPath
-        let currentComparablePath = comparableProjectPath(currentThread.normalizedProjectPath)
-        guard currentComparablePath != resolvedProjectPath else {
+        let currentComparablePath = TurnWorktreeRouting.comparableProjectPath(currentThread.normalizedProjectPath)
+        guard currentComparablePath != TurnWorktreeRouting.comparableProjectPath(normalizedProjectPath) else {
             return nil
         }
 
-        return matchingLiveThread(
+        return TurnWorktreeRouting.matchingLiveThread(
             in: codex.threads,
-            projectPath: resolvedProjectPath,
+            projectPath: normalizedProjectPath,
             sort: codex.sortThreads
         )
     }
@@ -354,27 +353,26 @@ private extension WorktreeFlowCoordinator {
             throw WorktreeFlowError("Could not resolve the target project path.")
         }
 
-        let resolvedProjectPath = canonicalProjectPath(normalizedProjectPath) ?? normalizedProjectPath
         var didTransferTrackedChanges = didTransferTrackedChangesBeforeRebind
 
         do {
             if transferTrackedChangesFromSource {
                 let gitService = GitActionsService(codex: codex, workingDirectory: sourceProjectPath)
                 let transferResult = try await gitService.transferManagedHandoff(
-                    targetProjectPath: resolvedProjectPath
+                    targetProjectPath: normalizedProjectPath
                 )
                 didTransferTrackedChanges = transferResult.transferredChanges
             }
 
             let movedThread = try await codex.moveThreadToProjectPath(
                 threadId: threadID,
-                projectPath: resolvedProjectPath
+                projectPath: normalizedProjectPath
             )
             codex.rememberWorktreeOriginPath(sourceProjectPath, forThreadId: movedThread.id)
             return .moved(
                 WorktreeFlowHandoffMove(
                     thread: movedThread,
-                    projectPath: resolvedProjectPath,
+                    projectPath: normalizedProjectPath,
                     transferredChanges: didTransferTrackedChanges,
                     createdManagedWorktree: createdManagedWorktree
                 )
@@ -386,7 +384,7 @@ private extension WorktreeFlowCoordinator {
                     let recoveryDetail = await recoverFailedThreadRebind(
                         didTransferTrackedChanges: didTransferTrackedChanges,
                         sourceProjectPath: sourceProjectPath,
-                        reboundProjectPath: resolvedProjectPath,
+                        reboundProjectPath: normalizedProjectPath,
                         cleanupManagedWorktreeOnFailedRebind: cleanupManagedWorktreeOnFailedRebind,
                         codex: codex
                     )
@@ -404,7 +402,7 @@ private extension WorktreeFlowCoordinator {
             let recoveryDetail = await recoverFailedThreadRebind(
                 didTransferTrackedChanges: didTransferTrackedChanges,
                 sourceProjectPath: sourceProjectPath,
-                reboundProjectPath: resolvedProjectPath,
+                reboundProjectPath: normalizedProjectPath,
                 cleanupManagedWorktreeOnFailedRebind: cleanupManagedWorktreeOnFailedRebind,
                 codex: codex
             )
@@ -691,38 +689,6 @@ private extension WorktreeFlowCoordinator {
         }
 
         return normalizedPath
-    }
-
-    static func canonicalProjectPath(_ rawPath: String) -> String? {
-        guard let normalizedPath = CodexThreadStartProjectBinding.normalizedProjectPath(rawPath) else {
-            return nil
-        }
-
-        return URL(fileURLWithPath: normalizedPath)
-            .resolvingSymlinksInPath()
-            .standardizedFileURL
-            .path
-    }
-
-    static func comparableProjectPath(_ rawPath: String?) -> String? {
-        guard let rawPath else {
-            return nil
-        }
-
-        return canonicalProjectPath(rawPath) ?? CodexThreadStartProjectBinding.normalizedProjectPath(rawPath)
-    }
-
-    static func matchingLiveThread(
-        in threads: [CodexThread],
-        projectPath: String,
-        sort: ([CodexThread]) -> [CodexThread]
-    ) -> CodexThread? {
-        let matchingLiveThreads = threads.filter { thread in
-            thread.syncState == .live
-                && comparableProjectPath(thread.normalizedProjectPath) == projectPath
-        }
-
-        return sort(matchingLiveThreads).first
     }
 
     static func normalizedForkProjectPath(_ rawPath: String?) -> String? {

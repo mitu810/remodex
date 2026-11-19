@@ -17,7 +17,7 @@ enum CodexThreadGoalError: LocalizedError, Equatable {
         case .ephemeralThread:
             return "Goals need a saved chat. This chat is temporary, so a goal cannot be attached to it."
         case .goalsUnsupported:
-            return "Goals are not available on the connected Codex runtime. Update the Codex CLI on your Mac (npm install -g @openai/codex@latest) and enable the goals feature."
+            return "Goals are not available on the connected Codex runtime. Update the Codex CLI on your computer (npm install -g @openai/codex@latest) and enable the goals feature."
         case .invalidBudget:
             return "Token budget must be a positive whole number."
         case .rpcFailure(let message):

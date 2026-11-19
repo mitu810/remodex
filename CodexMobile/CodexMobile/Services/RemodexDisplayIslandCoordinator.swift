@@ -251,7 +251,7 @@ final class RemodexDisplayIslandCoordinator {
             return "Remodex"
         }
 
-        let lastPathComponent = URL(fileURLWithPath: cwd).lastPathComponent
+        let lastPathComponent = cwd.pathDisplayName
         return lastPathComponent.isEmpty ? "Remodex" : lastPathComponent
     }
 

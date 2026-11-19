@@ -2926,7 +2926,7 @@ extension CodexService {
         clearRunningState(for: threadId)
         if shouldTreatAsThreadNotFound(error) {
             handleMissingThread(threadId)
-            let message = "This chat is unavailable on your Mac. Reopen it in Codex and try again."
+            let message = "This chat is unavailable on your computer. Reopen it in Codex and try again."
             lastErrorMessage = message
             throw CodexServiceError.invalidInput(message)
         }
@@ -3555,37 +3555,9 @@ extension CodexService {
             return path
         }
 
-        let normalizedRoot = normalizedFuzzyRootPath(root)
-        guard !normalizedRoot.isEmpty else {
+        guard let relative = RemoteHostPath.relativePath(trimmedPath, inside: root), !relative.isEmpty else {
             return trimmedPath
         }
-
-        if normalizedRoot == "/" {
-            return trimmedPath.hasPrefix("/") ? String(trimmedPath.dropFirst()) : trimmedPath
-        }
-
-        let rootPrefix = normalizedRoot.hasSuffix("/") ? normalizedRoot : "\(normalizedRoot)/"
-        if trimmedPath.hasPrefix(rootPrefix) {
-            return String(trimmedPath.dropFirst(rootPrefix.count))
-        }
-
-        return trimmedPath
-    }
-
-    private func normalizedFuzzyRootPath(_ root: String) -> String {
-        var normalized = root.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !normalized.isEmpty else {
-            return ""
-        }
-
-        if normalized == "/" {
-            return normalized
-        }
-
-        while normalized.hasSuffix("/") {
-            normalized.removeLast()
-        }
-
-        return normalized.isEmpty ? "/" : normalized
+        return relative
     }
 }

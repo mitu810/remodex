@@ -1,15 +1,16 @@
 {
   "name": "remodex",
-  "version": "4.0.0",
+  "version": "4.0.1",
+  "releaseRepository": "mitu810/remodex",
   "description": "Local bridge between Codex and the Remodex mobile app. Run `remodex up` to start.",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Emanuele-web04/remodex.git",
+    "url": "git+https://github.com/mitu810/remodex.git",
     "directory": "phodex-bridge"
   },
-  "homepage": "https://github.com/Emanuele-web04/remodex#readme",
+  "homepage": "https://github.com/mitu810/remodex#readme",
   "bugs": {
-    "url": "https://github.com/Emanuele-web04/remodex/issues"
+    "url": "https://github.com/mitu810/remodex/issues"
   },
   "main": "src/index.js",
   "bin": {
@@ -39,5 +40,8 @@
   "dependencies": {
     "qrcode-terminal": "^0.12.0",
     "ws": "^8.21.0"
+  },
+  "engines": {
+    "node": ">=20.8.0"
   }
 }

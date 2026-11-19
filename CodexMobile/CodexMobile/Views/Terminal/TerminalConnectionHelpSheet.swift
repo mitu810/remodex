@@ -317,31 +317,31 @@ private extension TerminalConnectionHelpStep {
             return [
                 TerminalConnectionHelpStep(
                     number: 1,
-                    title: "Choose the Mac",
+                    title: String(localized: "Choose the Mac"),
                     icon: "laptopcomputer",
                     body: "Use the Mac where you want commands to run. It needs to be awake and reachable from your iPhone, usually on the same Wi‑Fi or through your VPN."
                 ),
                 TerminalConnectionHelpStep(
                     number: 2,
-                    title: "Turn on Remote Login",
+                    title: String(localized: "Turn on Remote Login"),
                     icon: "lock.shield",
                     body: "Open System Settings → General → Sharing and turn on Remote Login. This enables SSH so trusted devices can open a terminal session."
                 ),
                 TerminalConnectionHelpStep(
                     number: 3,
-                    title: "Create a Remodex key",
+                    title: String(localized: "Create a Remodex key"),
                     icon: "key",
                     body: "Open Terminal and create a dedicated SSH key for Remodex. The public half is allowed on the Mac; the private half is pasted into Remodex and should not be shared anywhere else."
                 ),
                 TerminalConnectionHelpStep(
                     number: 4,
-                    title: "Fill in the connection",
+                    title: String(localized: "Fill in the connection"),
                     icon: "terminal",
                     body: "In Remodex, enter the connection as user@address, give it a nickname, paste the private key, and leave the port as 22 unless you changed it."
                 ),
                 TerminalConnectionHelpStep(
                     number: 5,
-                    title: "Connect and trust once",
+                    title: String(localized: "Connect and trust once"),
                     icon: "checkmark.seal.fill",
                     body: "The first connection may ask you to trust the host key. Accept only when the computer is the one you intended. If you change machines later, reset the saved host key in the connection editor."
                 )
@@ -350,14 +350,14 @@ private extension TerminalConnectionHelpStep {
             return [
                 TerminalConnectionHelpStep(
                     number: 1,
-                    title: "Install OpenSSH Server",
+                    title: String(localized: "Install OpenSSH Server"),
                     icon: "desktopcomputer",
                     body: "",
                     command: "Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0"
                 ),
                 TerminalConnectionHelpStep(
                     number: 2,
-                    title: "Start SSH and enable it on boot",
+                    title: String(localized: "Start SSH and enable it on boot"),
                     icon: "lock.shield",
                     body: "",
                     command: """
@@ -367,7 +367,7 @@ private extension TerminalConnectionHelpStep {
                 ),
                 TerminalConnectionHelpStep(
                     number: 3,
-                    title: "Create a key on the device that will connect",
+                    title: String(localized: "Create a key on the device that will connect"),
                     icon: "key",
                     body: "When asked, choose a passphrase for the recommended secure setup.",
                     command: "ssh-keygen -t ed25519 -f $HOME\\.ssh\\remodex_ed25519"
@@ -384,7 +384,7 @@ private extension TerminalConnectionHelpStep {
                 ),
                 TerminalConnectionHelpStep(
                     number: 5,
-                    title: "Find the PC IP, then use it in Remodex",
+                    title: String(localized: "Find the PC IP, then use it in Remodex"),
                     icon: "checkmark.seal.fill",
                     body: "",
                     command: "ipconfig"

@@ -484,7 +484,7 @@ struct TurnComposerView: View {
     }
 
     private var placeholderText: String {
-        isEmptyThread ? "Ask Remodex" : "Follow up"
+        isEmptyThread ? String(localized: "Ask Remodex") : String(localized: "Follow up")
     }
 
     // The radius animates to the expanded card's 26 inside the same morph.

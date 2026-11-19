@@ -1,5 +1,5 @@
 // FILE: codex-transport.test.js
-// Purpose: Verifies endpoint-backed Codex transport only sends after the websocket is open.
+// Purpose: Verifies native launcher selection, child lifecycle, and endpoint-backed transport.
 // Layer: Unit test
 // Exports: node:test suite
 // Depends on: node:test, node:assert/strict, ../src/codex-transport
@@ -209,6 +209,156 @@ test("missing environment variable diagnostics are extracted from Codex stderr",
   });
   assert.match(message, /CUSTOM_PROVIDER_KEY/);
   assert.match(message, /custom provider env var/);
+});
+
+const appServerArgs = ["app-server", "-c", "thread_unload_delay_secs=1"];
+
+test("Windows resolves an absolute native exe before npm shims across PATH entries", () => {
+  const native = String.raw`D:\Program Files\工具; & 100%\codex.exe`;
+  const shim = String.raw`C:\Users\someone\npm\codex.cmd`;
+  const env = { Path: `.;relative;"${path.win32.dirname(shim)}";"${path.win32.dirname(native)}"` };
+  const [launch] = createCodexLaunchPlans({
+    platform: "win32", env,
+    fsImpl: { statSync: (file) => ({ isFile: () => [native, shim, "codex.exe"].includes(file) }) },
+  });
+  assert.equal(launch.command, native);
+  assert.deepEqual(launch.args, appServerArgs);
+  assert.equal(launch.options.env.Path, env.Path);
+  assert.ok(!launch.options.shell);
+});
+
+test("Windows discovers a shim with an absolute path and keeps its filename out of shell syntax", () => {
+  const bin = String.raw`D:\用户 & %PATH%!\global bin`;
+  const shim = path.win32.join(bin, "codex.cmd");
+  const [launch] = createCodexLaunchPlans({
+    platform: "win32", env: { PATH: bin, SystemRoot: String.raw`C:\Windows` },
+    fsImpl: { statSync: (file) => ({ isFile: () => file === shim }) },
+  });
+  assert.equal(launch.command, String.raw`C:\Windows\System32\cmd.exe`);
+  assert.ok(Object.values(launch.options.env).includes(shim));
+  assert.ok(!launch.args.join(" ").includes(shim));
+  assert.equal(launch.options.windowsVerbatimArguments, true);
+});
+
+test("Linux uses PATH without consulting a Mac desktop bundle", () => {
+  const plans = createCodexLaunchPlans({
+    platform: "linux", env: { PATH: "/opt/codex/bin" }, appPath: "/opt/Codex.app",
+    fsImpl: { statSync: () => ({ isFile: () => true }) },
+  });
+  assert.deepEqual(plans.map(({ command, args }) => [command, args]), [["codex", appServerArgs]]);
+});
+
+test("an explicit absolute executable is the only launch plan on each platform", () => {
+  for (const [platform, command] of [
+    ["linux", "/opt/my bin/codex & λ"],
+    ["darwin", "/Applications/custom codex"],
+    ["win32", String.raw`D:\Native Codex\codex.exe`],
+  ]) {
+    const plans = createCodexLaunchPlans({ platform, env: { REMODEX_CODEX_COMMAND: command } });
+    assert.deepEqual(plans.map((plan) => [plan.command, plan.args]), [[command, appServerArgs]]);
+  }
+});
+
+test("invalid executable overrides are rejected before spawning", () => {
+  for (const [platform, command] of [
+    ["linux", "codex --other"], ["win32", "codex.exe"], ["win32", String.raw`C:bin\codex.exe`],
+    ["win32", String.raw`\bin\codex.exe`], ["win32", String.raw`C:\bin\run.ps1`],
+    ["win32", 'C:\\bin\\name"withquote.cmd'],
+  ]) {
+    assert.throws(
+      () => createCodexLaunchPlans({ platform, env: { REMODEX_CODEX_COMMAND: command } }),
+      /REMODEX_CODEX_COMMAND/
+    );
+  }
+});
+
+test("a missing Windows executable reports through the transport without searching the working directory", async () => {
+  let spawned = false;
+  const transport = createCodexTransport({
+    platform: "win32", env: { Path: ".;relative" },
+    spawnImpl() { spawned = true; return createFakeChild(); },
+  });
+  const errors = [];
+  transport.onError((error) => errors.push(error.message));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(spawned, false);
+  assert.match(errors[0], /PATH/);
+  transport.send("{}");
+  transport.shutdown();
+});
+
+test("Windows shutdown requests the launched PID tree exactly once", () => {
+  const calls = [];
+  const child = createFakeChild();
+  const transport = createCodexTransport({
+    platform: "win32",
+    env: { REMODEX_CODEX_COMMAND: String.raw`D:\Codex\codex.exe`, SystemRoot: String.raw`C:\Windows` },
+    spawnImpl(command, args) {
+      calls.push([command, args]);
+      return calls.length === 1 ? child : createFakeChild();
+    },
+  });
+  transport.shutdown();
+  transport.shutdown();
+  assert.deepEqual(calls.slice(1), [[String.raw`C:\Windows\System32\taskkill.exe`, ["/pid", "123", "/t", "/f"]]]);
+});
+
+test("shutdown never looks up an already terminated Windows child's PID", () => {
+  const child = createFakeChild();
+  child.signalCode = "SIGTERM";
+  const calls = [];
+  const transport = createCodexTransport({
+    platform: "win32", env: { REMODEX_CODEX_COMMAND: String.raw`D:\Codex\codex.exe` },
+    spawnImpl(command) { calls.push(command); return child; },
+  });
+  transport.shutdown();
+  assert.equal(calls.length, 1);
+  assert.equal(child.killed, false);
+});
+
+test("Linux shutdown sends SIGTERM directly to the child", () => {
+  const child = createFakeChild();
+  let signal;
+  child.kill = (value) => { signal = value; };
+  const transport = createCodexTransport({
+    platform: "linux", env: {}, spawnImpl: () => child,
+  });
+  transport.shutdown();
+  assert.equal(signal, "SIGTERM");
+});
+
+test("a timed restart stops a Unix child that ignores SIGTERM", async () => {
+  const child = createFakeChild();
+  const signals = [];
+  child.once = () => {};
+  child.kill = (signal) => { signals.push(signal); };
+  const transport = createCodexTransport({
+    platform: "linux", env: {}, spawnImpl: () => child,
+  });
+  transport.shutdown({ forceAfterMs: 5 });
+  await new Promise((resolve) => setTimeout(resolve, 15));
+  assert.deepEqual(signals, ["SIGTERM", "SIGKILL"]);
+});
+
+test("the native launcher preserves a literal executable path, app-server arguments and stdio", { timeout: 10_000 }, async (t) => {
+  const bin = fs.mkdtempSync(path.join(os.tmpdir(), "codex 工具 & %PATH%! "));
+  t.after(() => fs.rmSync(bin, { recursive: true, force: true }));
+  const windows = process.platform === "win32";
+  const file = path.join(bin, windows ? "codex.cmd" : "codex");
+  const script = windows
+    ? "@echo off\r\necho %*\r\nset /p packet=\r\nset packet\r\n"
+    : '#!/bin/sh\nprintf "%s\\n" "$*"\nIFS= read -r packet\nprintf "packet=%s\\n" "$packet"\n';
+  fs.writeFileSync(file, script, { mode: 0o755 });
+  const transport = createCodexTransport({ env: { PATH: bin, SystemRoot: process.env.SystemRoot } });
+  t.after(() => transport.shutdown());
+  const lines = [];
+  transport.onMessage((line) => lines.push(line));
+  transport.onStarted(() => transport.send('{"id":1}'));
+  await new Promise((resolve, reject) => {
+    transport.onClose(resolve);
+    transport.onError(reject);
+  });
+  assert.deepEqual(lines, ["app-server -c thread_unload_delay_secs=1", 'packet={"id":1}']);
 });
 
 function createFakeChild() {

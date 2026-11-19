@@ -68,9 +68,9 @@ struct TurnConversationContainerView: View {
                 AccessoryBackedEmptyState(
                     systemImage: snapshot.status.symbolName,
                     tint: snapshot.status.tint,
-                    title: snapshot.status == .inProgress ? "Plan in progress" : "Plan ready",
-                    summary: summary.isEmpty ? "Codex has prepared a plan for this chat." : summary,
-                    detail: "Open the plan card above the composer to review the current steps."
+                    title: snapshot.status == .inProgress ? String(localized: "Plan in progress") : String(localized: "Plan ready"),
+                    summary: summary.isEmpty ? String(localized: "Codex has prepared a plan for this chat.") : summary,
+                    detail: String(localized: "Open the plan card above the composer to review the current steps.")
                 )
             )
         }

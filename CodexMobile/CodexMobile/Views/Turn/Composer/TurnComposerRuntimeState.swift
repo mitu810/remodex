@@ -53,13 +53,13 @@ struct TurnComposerRuntimeState: Equatable {
             serviceTiers: codex.selectedModelOption(threadId: threadId)?.serviceTiers ?? [],
             settingsStatus: threadId.flatMap { id in
                 if codex.threadRuntimeOverride(for: id)?.pendingRuntimeSettings.isEmpty == false {
-                    if !codex.isConnected { return "Settings saved locally" }
-                    if !codex.supportsRuntimeSettingsSync { return "Applies when you send" }
-                    if codex.runtimeSettingsUpdateErrors[id] != nil { return "Settings not applied" }
-                    return "Updating settings…"
+                    if !codex.isConnected { return String(localized: "Settings saved locally") }
+                    if !codex.supportsRuntimeSettingsSync { return String(localized: "Applies when you send") }
+                    if codex.runtimeSettingsUpdateErrors[id] != nil { return String(localized: "Settings not applied") }
+                    return String(localized: "Updating settings…")
                 }
-                if inheritsServiceTier { return "Using task speed" }
-                return codex.runningThreadIDs.contains(id) ? "Applies to the next turn" : nil
+                if inheritsServiceTier { return String(localized: "Using task speed") }
+                return codex.runningThreadIDs.contains(id) ? String(localized: "Applies to the next turn") : nil
             },
             inheritsServiceTier: inheritsServiceTier
         )

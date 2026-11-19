@@ -50,7 +50,7 @@ struct CodexFuzzyFileMatch: Decodable, Hashable, Sendable, Identifiable {
         } else if let snakeCaseName = try container.decodeIfPresent(String.self, forKey: .fileNameSnake) {
             fileName = snakeCaseName
         } else {
-            fileName = (path as NSString).lastPathComponent
+            fileName = RemoteHostPath.displayName(path, relativeTo: root)
         }
 
         if let decodedScore = try? container.decode(Double.self, forKey: .score) {

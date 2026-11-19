@@ -2,13 +2,11 @@
 // Purpose: Abstracts the Codex-side transport so the bridge can talk to either a spawned app-server or an existing WebSocket endpoint.
 // Layer: CLI helper
 // Exports: createCodexTransport
-// Depends on: child_process, fs, path, ws
+// Depends on: child_process, ws, ./codex-launch
 
 const { spawn } = require("child_process");
-const fs = require("fs");
-const path = require("path");
 const WebSocket = require("ws");
-const { resolveBundledCodexCommand, resolveCodexAppPath } = require("./codex-desktop-app");
+const { createCodexLaunchPlans, windowsSystemTool } = require("./codex-launch");
 
 function createCodexTransport({
   endpoint = "",
@@ -26,7 +24,7 @@ function createCodexTransport({
 }
 
 function createSpawnTransport({ env, appPath, platform, spawnImpl = spawn }) {
-  const launchPlans = createCodexLaunchPlans({ env, appPath, platform });
+  let launchPlans = [];
   let launchIndex = -1;
   let activeLaunch = null;
   let codex = null;
@@ -36,7 +34,13 @@ function createSpawnTransport({ env, appPath, platform, spawnImpl = spawn }) {
   let didReportError = false;
   const listeners = createListenerBag();
 
-  spawnNextLaunch();
+  try {
+    launchPlans = createCodexLaunchPlans({ env, appPath, platform });
+    spawnNextLaunch();
+  } catch (error) {
+    // Preserve the same onError contract for discovery and asynchronous spawn errors.
+    queueMicrotask(() => listeners.emitError(error));
+  }
 
   return {
     mode: "spawn",
@@ -44,7 +48,7 @@ function createSpawnTransport({ env, appPath, platform, spawnImpl = spawn }) {
       return activeLaunch?.description || launchPlans[0]?.description || "`codex app-server`";
     },
     send(message) {
-      if (!codex.stdin.writable || codex.stdin.destroyed || codex.stdin.writableEnded) {
+      if (!codex?.stdin.writable || codex.stdin.destroyed || codex.stdin.writableEnded) {
         return;
       }
 
@@ -62,9 +66,18 @@ function createSpawnTransport({ env, appPath, platform, spawnImpl = spawn }) {
     onStarted(handler) {
       listeners.onStarted = handler;
     },
-    shutdown() {
+    shutdown({ forceAfterMs } = {}) {
+      if (didRequestShutdown) return;
       didRequestShutdown = true;
-      shutdownCodexProcess(codex);
+      shutdownCodexProcess(codex, { env, platform, spawnImpl });
+      if (forceAfterMs && platform !== "win32" && codex?.pid) {
+        const child = codex;
+        const timer = setTimeout(() => {
+          if (child.exitCode === null && !child.signalCode) child.kill("SIGKILL");
+        }, forceAfterMs);
+        timer.unref?.();
+        child.once("close", () => clearTimeout(timer));
+      }
     },
   };
 
@@ -168,73 +181,24 @@ function createSpawnTransport({ env, appPath, platform, spawnImpl = spawn }) {
   }
 }
 
-// Make explicit Desktop handoff responsive after unsubscribe. Codex unloads
-// only unsubscribed, inactive threads, and this override stays in our child.
-const LOCAL_APP_SERVER_ARGS = ["app-server", "-c", "thread_unload_delay_secs=1"];
-
-// Builds a single, platform-aware launch path so the bridge never "guesses"
-// between multiple commands and accidentally starts duplicate runtimes.
-function createCodexLaunchPlans({
-  env,
-  appPath = "",
-  platform = process.platform,
-  fsImpl = fs,
-  pathImpl = path,
-} = {}) {
-  const sharedOptions = {
-    stdio: ["pipe", "pipe", "pipe"],
-    env: { ...env },
-  };
-
-  if (platform === "win32") {
-    return [{
-      command: env.ComSpec || "cmd.exe",
-      args: ["/d", "/c", `codex ${LOCAL_APP_SERVER_ARGS.join(" ")}`],
-      options: {
-        ...sharedOptions,
-        windowsHide: true,
-      },
-      description: "`cmd.exe /d /c codex app-server`",
-    }];
-  }
-
-  const launches = [{
-    command: "codex",
-    args: LOCAL_APP_SERVER_ARGS,
-    options: sharedOptions,
-    description: "`codex app-server`",
-  }];
-
-  const bundledCommand = resolveBundledCodexCommand(
-    resolveCodexAppPath({ appPath, platform, homeDir: env.HOME, fsImpl }),
-    { fsImpl, pathImpl }
-  );
-  if (bundledCommand) {
-    launches.push({
-      command: bundledCommand,
-      args: LOCAL_APP_SERVER_ARGS,
-      options: sharedOptions,
-      description: `\`${bundledCommand} app-server\``,
-    });
-  }
-
-  return launches;
-}
-
 // Stops the exact process tree we launched on Windows so the shell wrapper
 // does not leave a child Codex process running in the background.
-function shutdownCodexProcess(codex) {
-  if (codex.killed || codex.exitCode !== null) {
+function shutdownCodexProcess(codex, { env, platform, spawnImpl }) {
+  if (!codex || codex.killed || codex.exitCode !== null || codex.signalCode) {
     return;
   }
 
-  if (process.platform === "win32" && codex.pid) {
-    const killer = spawn("taskkill", ["/pid", String(codex.pid), "/t", "/f"], {
+  if (platform === "win32" && codex.pid) {
+    const killer = spawnImpl(windowsSystemTool("taskkill.exe", env), ["/pid", String(codex.pid), "/t", "/f"], {
       stdio: "ignore",
       windowsHide: true,
     });
-    killer.on("error", () => {
-      codex.kill();
+    function killChildIfRunning() {
+      if (codex.exitCode === null && !codex.signalCode && !codex.killed) codex.kill();
+    }
+    killer.on("error", killChildIfRunning);
+    killer.on("close", (code) => {
+      if (code !== 0) killChildIfRunning();
     });
     return;
   }
@@ -262,8 +226,8 @@ function formatCodexLaunchFailure({ launchDescription, reason }) {
   const guidance = [
     `Codex is asking for ${missingEnvVar}, which usually means your Codex config forces API-key auth or a custom provider env var.`,
     "Remodex does not store or forward OpenAI API keys.",
-    "Recommended fix: run `codex login` on this Mac, then restart Remodex.",
-    "If you intentionally use API-key auth, run `printenv OPENAI_API_KEY | codex login --with-api-key` or make that env var available to the Remodex daemon yourself.",
+    "Recommended fix: run `codex login` on the bridge host, then restart Remodex.",
+    "If you intentionally use API-key auth, use `codex login --with-api-key` with your key on standard input or make the required environment variable available to the Remodex service.",
   ];
   return `${message}\n${guidance.join("\n")}`;
 }

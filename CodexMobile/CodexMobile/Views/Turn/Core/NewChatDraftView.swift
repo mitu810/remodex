@@ -497,10 +497,10 @@ struct NewChatDraftView: View {
             }
             let menu = UIMenu(title: tier.title, children: actions)
             menu.subtitle = models.first { $0.id == selectedOpenCodeModelID }?.displayName
-                ?? "\(models.count) models"
+                ?? String(localized: "\(models.count) models")
             return menu
         }
-        let retry = UIAction(title: "Refresh models", image: UIImage(systemName: "arrow.clockwise")) { _ in
+        let retry = UIAction(title: String(localized: "Refresh models"), image: UIImage(systemName: "arrow.clockwise")) { _ in
             loadOpenCodeModels(force: true)
         }
         return UIMenu(children: sections + [retry])
@@ -522,17 +522,17 @@ struct NewChatDraftView: View {
                     self.selectedOpenCodeVariantID = nil
                 }
                 if openCodeModels.isEmpty {
-                    openCodeModelsError = "No OpenCode Zen, Go, or Free models are available. Set up OpenCode on your Mac and retry."
+                    openCodeModelsError = "No OpenCode Zen, Go, or Free models are available. Set up OpenCode on your computer and retry."
                 }
             } catch {
-                openCodeModelsError = "\(error.localizedDescription) Install OpenCode on your Mac, sign in to Zen or Go if needed, and retry."
+                openCodeModelsError = "\(error.localizedDescription) Install OpenCode on your computer, sign in to Zen or Go if needed, and retry."
             }
         }
     }
 
     private var toolbarTitleLabel: some View {
         TurnChatToolbarTitleLabel(
-            title: "New thread",
+            title: String(localized: "New thread"),
             subtitle: placeholderFolderName ?? trustedHostName,
             // General chat uses the inline context menu; folder-backed drafts can still open the sheet.
             onTap: !isFromGeneralChat && hasSelectedProject ? { activeSheet = .projectPicker } : nil,
@@ -592,7 +592,7 @@ struct NewChatDraftView: View {
     private var draftThreadActions: [TurnThreadActionMenuItem] {
         [
             TurnThreadActionMenuItem(
-                title: "Open Terminal Here",
+                title: String(localized: "Open Terminal Here"),
                 icon: .system("terminal"),
                 isEnabled: !areDraftToolbarActionsDisabled && onOpenTerminal != nil
             ) {
@@ -680,8 +680,8 @@ struct NewChatDraftView: View {
                 }.value
                 guard let presentation else {
                     viewModel.gitSyncAlert = TurnGitSyncAlert(
-                        title: "Git Error",
-                        message: "There are no repository changes to show.",
+                        title: String(localized: "Git Error"),
+                        message: String(localized: "There are no repository changes to show."),
                         action: .dismissOnly
                     )
                     return
@@ -689,13 +689,13 @@ struct NewChatDraftView: View {
                 repositoryDiffPresentation = presentation
             } catch let error as GitActionsError {
                 viewModel.gitSyncAlert = TurnGitSyncAlert(
-                    title: "Git Error",
+                    title: String(localized: "Git Error"),
                     message: error.errorDescription ?? "Could not load repository changes.",
                     action: .dismissOnly
                 )
             } catch {
                 viewModel.gitSyncAlert = TurnGitSyncAlert(
-                    title: "Git Error",
+                    title: String(localized: "Git Error"),
                     message: error.localizedDescription,
                     action: .dismissOnly
                 )
@@ -742,7 +742,7 @@ struct NewChatDraftView: View {
         guard !projectChoices.isEmpty else {
             return UIMenu(children: [
                 UIAction(
-                    title: "No folders available",
+                    title: String(localized: "No folders available"),
                     image: RemodexIcon.menuUIImage(systemName: "folder"),
                     attributes: [.disabled]
                 ) { _ in },
@@ -776,7 +776,7 @@ struct NewChatDraftView: View {
 
     private func draftRuntimeModeMenu() -> UIMenu {
         let localAction = UIAction(
-            title: "Work locally",
+            title: String(localized: "Work locally"),
             image: RemodexIcon.menuUIImage(systemName: "laptopcomputer"),
             state: draftRuntimeMode == .local ? .on : .off
         ) { _ in
@@ -784,7 +784,7 @@ struct NewChatDraftView: View {
             draftRuntimeMode = .local
         }
         let worktreeAction = UIAction(
-            title: "New worktree",
+            title: String(localized: "New worktree"),
             image: CodexWorktreeIcon.menuImage(pointSize: 16),
             state: draftRuntimeMode == .newWorktree ? .on : .off
         ) { _ in
@@ -841,7 +841,7 @@ struct NewChatDraftView: View {
             }
         }
         let recentSection = UIMenu(
-            title: "Recent branches",
+            title: String(localized: "Recent branches"),
             options: [.displayInline, .singleSelection],
             children: branchActions
         )
@@ -851,7 +851,7 @@ struct NewChatDraftView: View {
             // Creating a branch only makes sense when it becomes the checkout;
             // a worktree base must already exist.
             trailingActions.append(UIAction(
-                title: "New branch...",
+                title: String(localized: "New branch..."),
                 image: RemodexIcon.menuUIImage(systemName: "plus")
             ) { _ in
                 newDraftBranchName = "remodex/"
@@ -860,7 +860,7 @@ struct NewChatDraftView: View {
         }
         if orderedBranches.count > recentBranches.count {
             trailingActions.append(UIAction(
-                title: "All branches...",
+                title: String(localized: "All branches..."),
                 image: RemodexIcon.menuUIImage(systemName: "magnifyingglass")
             ) { _ in
                 isShowingAllBranchesPicker = true
@@ -1039,7 +1039,7 @@ struct NewChatDraftView: View {
     private var draftThread: CodexThread {
         CodexThread(
             id: route.id,
-            title: "New thread",
+            title: String(localized: "New thread"),
             cwd: selectedProjectPath,
             model: selectedRuntimeProvider == .opencode ? selectedOpenCodeModelID : nil,
             runtimeProvider: selectedRuntimeProvider

@@ -1,279 +1,114 @@
-# Self-Hosting Remodex
+# Running Remodex Locally
 
-This guide is for developers who clone the public GitHub repository and want to run Remodex on infrastructure they control.
+Remodex runs Codex, Git and repository operations on your own macOS, native Windows or Linux computer. The phone connects through a local relay using QR pairing and encrypted application messages. Windows does not require WSL.
 
-It covers two supported setups:
+The [Chinese server installation guide](server-install.zh-CN.md) covers the portable setup script, independent relays, and public WSS with dynamic DNS.
 
-1. Local LAN pairing on your own machine
-2. A self-hosted VPS relay that your bridge connects to over the internet
+## Prerequisites
 
-This document intentionally avoids any private hosted-service details. If you are using the public repo, assume you are bringing your own relay endpoint.
+- Node.js 20.8 or newer; prefer a current LTS release.
+- Native Codex CLI and Git available to the user running the bridge.
+- Codex already authenticated: run `codex login status` in that user’s terminal.
+- A signed Remodex app on the iPhone.
+- A LAN, private-network, or public WSS address both the phone and the bridge can reach.
 
-The public source tree is local-first and self-host friendly:
+## Start a local relay
 
-- there is no public production relay baked into the GitHub source
-- local pairing should work out of the box with `./run-local-remodex.sh`
-- internet-facing manual bridge setups should pass their own relay URL explicitly with `REMODEX_RELAY`; source-checkout launcher setups can pass it with `./run-local-remodex.sh --relay-url`
-- the first QR scan bootstraps trust, then later reconnects can reuse the same trusted Mac through that relay
-- the built-in background daemon for trusted reconnect is currently macOS-only
+From the repository root, install dependencies without automatic Codex installation:
 
-## What Remodex Self-Hosting Means
+```text
+npm --prefix relay ci --ignore-scripts
+npm --prefix phodex-bridge ci --ignore-scripts
+node relay/server.js
+```
 
-Remodex is local-first.
+Keep that terminal open. The relay listens on port 9000 by default. Allow inbound connections to this port on your trusted local network when prompted by the host firewall.
 
-That means:
+Check `http://127.0.0.1:9000/health` on the computer. In PowerShell, use `Invoke-RestMethod http://127.0.0.1:9000/health`; on macOS/Linux use `curl http://127.0.0.1:9000/health`. The response should contain `ok: true`.
 
-- the bridge runs on your own Mac
-- Codex runs on your own Mac
-- git commands run on your own Mac
-- your iPhone is a remote control
-- the relay is only a transport layer for pairing, trusted-session resolve, and encrypted message forwarding
+## Pair from Windows PowerShell
 
-The relay does not run Codex and does not get your plaintext application payloads after the secure handshake completes.
+Replace the example address with your computer’s LAN or private-network address:
 
-## Option 1: Local LAN Setup
+```powershell
+$env:REMODEX_RELAY = "ws://192.168.1.10:9000/relay"
+node .\phodex-bridge\bin\remodex.js up
+```
 
-This is the easiest way to try the public repo, but on iPhone it should be treated as a best-effort local test path. The recommended self-host setup for regular use is Tailscale or another stable private network path to your relay.
+This registers and starts a current-user scheduled task and prints the pairing QR. It uses native Windows Codex, files and Git. It does not require administrator privileges, WSL, or a SYSTEM service. The task starts again at user logon and needs the user to remain logged in.
 
-### What you need
+Use `run` instead of `up` for an initial foreground check. If Codex is installed outside PATH, set `$env:REMODEX_CODEX_COMMAND` to its absolute `.exe` or `.cmd` path before starting. The background service saves that selection and the supported user environment.
 
-- a Mac with Codex CLI installed
-- an iPhone with a Remodex build installed
-- both devices on the same local network
-
-### Start everything locally
-
-From the repo root:
+## Pair from Linux
 
 ```sh
-git clone https://github.com/Emanuele-web04/remodex.git
-cd remodex
-./run-local-remodex.sh
+REMODEX_RELAY="ws://192.168.1.10:9000/relay" node ./phodex-bridge/bin/remodex.js up
 ```
 
-What this does:
+This installs `~/.config/systemd/user/remodex-bridge.service` (or the equivalent under `XDG_CONFIG_HOME`) and starts it with `systemctl --user`. It uses the current user’s home, Codex authentication and PATH. No root service is installed.
 
-- starts a local relay on your machine
-- starts the Remodex bridge
-- prints a pairing QR code for first-time trust bootstrap or recovery
+If the system has no systemd user manager, use `run` instead of `up`. Whether the user service survives logout depends on the host’s user-manager configuration. Remodex does not enable lingering or change system login policy automatically.
 
-Then:
+## Pair from macOS
 
-1. Open the iPhone app
-2. Scan the QR code from inside the app
-3. Start a thread and send a message
-4. On later launches, let the app try trusted reconnect before scanning again
-
-### If your iPhone cannot reach the default hostname
-
-Pass a hostname or IP address that the phone can actually reach:
+The convenience launcher keeps a local relay and foreground bridge together:
 
 ```sh
-./run-local-remodex.sh --hostname 192.168.1.10
+./run-local-remodex.sh --hostname <phone-reachable-hostname-or-ip>
 ```
 
-If you are using a tunnel or reverse proxy in front of the local relay, pass the public URL instead of a LAN hostname.
+For background operation, keep the relay running separately, set `REMODEX_RELAY` to its reachable address, and run `node ./phodex-bridge/bin/remodex.js up`. The existing launchd LaunchAgent owns the background bridge.
 
-For example, with a temporary Cloudflare Tunnel, run this in one terminal:
+## Scan and reconnect
 
-```sh
-cloudflared tunnel --url http://127.0.0.1:9000
-```
+1. Scan the QR from inside the Remodex app.
+2. Create or continue a thread, then send a message.
+3. Reopen the phone app and let saved trust reconnect before scanning again.
 
-Copy the generated `https://<random>.trycloudflare.com` URL, then start Remodex in another terminal:
+The phone cannot use `localhost` to reach another computer. Keep the relay running as well as the bridge. Remodex manages the bridge service lifecycle, and the relay has its own process.
 
-```sh
-./run-local-remodex.sh --relay-url https://<random>.trycloudflare.com
-```
+Pairing preserves legacy protocol field names so existing Mac records continue to work. Windows paths keep their drive/UNC spelling; Linux paths remain POSIX paths. Paths are interpreted on the host, not as iPhone filesystem paths.
 
-The launcher accepts `http://` or `https://` tunnel URLs, converts them to `ws://` or `wss://`, and appends `/relay` when the URL has no path.
+## Public access with WSS
 
-### Health check
+Run a relay, bridge, and TLS reverse proxy on each computer you want to reach. Point that computer's hostname at its public address. For IPv6, publish an `AAAA` record. A dynamic DNS client such as [ddns-go](https://github.com/jeessy2/ddns-go) can update it from the host's current non-temporary public IPv6. Use **DNS only** for a direct Cloudflare DNS setup.
 
-By default the local relay listens on port `9000`.
+- When public TCP `443` is reachable, run `node setup-server.cjs relay 127.0.0.1 9000` and use the [standard Caddy example](../relay/Caddyfile.example).
+- When only a high port is reachable, the [IPv6 Caddy example](../relay/Caddyfile.ipv6.example) uses Cloudflare DNS-01 and public TCP `9999` by default. Start the relay with `node setup-server.cjs relay 127.0.0.1 9999`. Caddy listens on IPv6 and the relay stays on IPv4 loopback.
 
-From the same Mac:
+Use the public `wss://` URL for the bridge and QR. Include a custom port in the URL. Check `/health` from the phone on cellular and from the bridge host. If the host cannot reach its public address, resolve that hostname locally to Caddy's listener and keep the same hostname for TLS. A DNS address change preserves pairing when the hostname and port stay the same. If the URL changes, start the bridge with the new URL and scan a fresh QR.
 
-```sh
-curl http://127.0.0.1:9000/health
-```
+The [HTTPS section of the server installation guide](server-install.zh-CN.md#https-入口) lists the DNS token permissions, Caddy commands, and pairing checks. The high-port IPv6 setup was verified from a real iPhone in a different public IPv6 network.
 
-You should get:
+## Service lifecycle
 
-```json
-{"ok":true}
-```
+Use `node ./phodex-bridge/bin/remodex.js <command>` from the source checkout, or `remodex <command>` for a global installation:
 
-## Option 2: Self-Hosted VPS Relay
+| Command | Behavior |
+|---|---|
+| `up` | Save settings, start the native user service, print a fresh QR |
+| `run` | Run in the foreground |
+| `start` | Start/refresh service registration without printing QR |
+| `restart` | Restart using saved configuration and runtime settings |
+| `qr` / `pair` | Refresh the service QR while preserving installed settings |
+| `status --json` | Read sanitized service and bridge status |
+| `stop` | Stop the service; Windows/Linux also target an active foreground bridge |
+| `uninstall-service` | Stop/remove registration, preserve trust and configuration |
+| `reset-pairing` | Stop the bridge, clear trusted phones, preserve the host identity |
 
-Use this when you want the bridge on your Mac to connect through a relay you run on a VPS.
+Run `restart` after updating a global package so its saved launch paths are refreshed. Keep your source checkout in place while a service points at it.
 
-This is also the best base for a Tailscale setup: the relay can live on a Mac, a mini server, or a VPS you control, as long as the iPhone can reach it reliably.
+Configuration, service environment, logs and identity normally live under `~/.remodex` (`%USERPROFILE%\.remodex` on Windows). Windows uses current-user ACLs for private state; POSIX files are owner-only. API keys from the invoking terminal are not copied into service manifests. Authenticate Codex directly instead.
 
-### What runs where
+## Troubleshooting and scope
 
-On your VPS:
+- **QR does not appear:** check `status` and the reported log paths. Verify native `codex login status`, Codex executable selection and the relay address.
+- **Phone cannot connect:** verify reachability and local firewall rules. A successful health check on the computer does not prove the phone can reach the same address.
+- **Linux service unavailable:** use foreground `run`; do not use sudo to start a different user’s Codex.
+- **Another bridge is running:** stop it before starting another instance with the same state directory. Native instances use an OS-owned lock that releases when the process exits.
+- **Windows SSH terminal:** SSH is a separate connection. Its shell may be PowerShell or cmd.exe, so enter `cd` manually; the app does not send a POSIX auto-cd command for Windows directories.
+- **Desktop features:** core thread control works through app-server. Existing IPC mirroring and rollout recovery remain available when a compatible local bus exists. AppleScript refresh and the advertised desktop-handoff capability remain macOS features; Windows/Linux desktop UI parity is not claimed.
 
-- the Remodex relay
+CI covers three-platform runtime/service contracts and Linux unit parsing. Actual Windows/Linux phone pairing, stop, reboot, and reconnect remain device-validation steps. No Xcode tests are required for local bridge checks.
 
-On your Mac:
-
-- the Remodex bridge
-- Codex CLI / `codex app-server`
-
-On your iPhone:
-
-- the Remodex app
-
-### Start the relay on the VPS
-
-From the public repo:
-
-```sh
-git clone https://github.com/Emanuele-web04/remodex.git
-cd remodex/relay
-npm install
-npm start
-```
-
-By default the relay listens on port `9000`.
-
-### Verify the relay
-
-On the VPS:
-
-```sh
-curl http://127.0.0.1:9000/health
-```
-
-You should get:
-
-```json
-{"ok":true}
-```
-
-### Put a reverse proxy in front of it
-
-Expose the relay through a public `ws://` or `wss://` endpoint that forwards to the Node relay.
-
-Two common patterns are:
-
-- a dedicated subdomain, for example `wss://relay.example.com/relay`
-- a shared-domain subpath, for example `wss://api.example.com/remodex/relay`
-
-If you use a shared-domain subpath, make sure your reverse proxy strips the prefix before forwarding so the Node process still receives `/relay/...`.
-
-### Point the bridge at your VPS relay
-
-On the Mac that runs the bridge:
-
-```sh
-REMODEX_RELAY="wss://relay.example.com/relay" remodex up
-```
-
-If you are running the source-checkout launcher behind a tunnel or reverse proxy that forwards to the local relay, pass that public URL directly to the launcher:
-
-```sh
-./run-local-remodex.sh --relay-url https://<random>.trycloudflare.com
-```
-
-Or, if you are running from source:
-
-```sh
-cd phodex-bridge
-npm install
-REMODEX_RELAY="wss://relay.example.com/relay" npm start
-```
-
-The bridge will print a QR code the first time you trust that Mac, or later if you intentionally reset trust.
-
-That QR carries the relay URL and session information, so the iPhone does not need a hardcoded relay endpoint in the public source build.
-
-After the first successful scan:
-
-- the iPhone stores the Mac as a trusted device
-- the bridge keeps its local device identity
-- the relay can resolve the current live session for that trusted Mac
-- the app can reconnect without requiring a new QR every time
-
-Today, that background-service path is built in for macOS. If you self-host against a non-macOS bridge, pairing and relay routing still work, but you must manage persistence/background service behavior yourself.
-
-If you install the bridge from npm and do not use the local launcher, make sure you export `REMODEX_RELAY` before running `remodex up`.
-
-## Push Notifications
-
-Managed push is optional.
-
-For public self-hosting:
-
-- you do not need push to use Remodex
-- local in-app and local-device flows can still work without it
-- the relay keeps push endpoints disabled by default
-
-Do not turn push on unless you are also ready to configure:
-
-- a bridge-side `REMODEX_PUSH_SERVICE_URL`
-- APNs credentials on the relay side
-- your own operational setup for notification delivery
-
-If you do nothing here, push stays off.
-
-## Reverse Proxy Notes
-
-If your relay sits behind Traefik, Nginx, or Caddy:
-
-- forward WebSocket upgrades correctly
-- forward the `/relay/...` path to the relay process
-- only enable `REMODEX_TRUST_PROXY=true` when the proxy is trusted and sanitizes forwarded IP headers
-
-## What Not to Commit
-
-If you are self-hosting from the public repo, keep these things out of Git:
-
-- your real relay hostname
-- your private VPS IP addresses
-- any APNs credentials
-- any private package or App Store build defaults
-
-The public repo should stay generic. Your actual deployment values belong in your own environment, build pipeline, or private config.
-
-## Troubleshooting
-
-### The bridge starts but the iPhone cannot connect
-
-Check:
-
-- the relay is reachable from the phone
-- your reverse proxy forwards WebSockets
-- the bridge is using the correct `REMODEX_RELAY`
-- the public endpoint uses `wss://` if you are going over the internet
-
-### Local LAN pairing fails
-
-Try a concrete LAN IP:
-
-```sh
-./run-local-remodex.sh --hostname 192.168.1.10
-```
-
-If local LAN pairing still fails on iPhone even though the relay health check works, prefer a Tailscale-reachable relay instead of continuing to rely on plain `ws://` over the same Wi-Fi.
-
-### The relay health check works, but pairing still fails
-
-That usually means one of these:
-
-- the public path is wrong
-- the reverse proxy is not forwarding upgrades
-- the bridge is pointing at the wrong relay base URL
-
-## Minimal Summary
-
-If you cloned the public repo, the supported self-hosting story is:
-
-- run the relay yourself
-- prefer a relay path reachable from iPhone over Tailscale or another stable private network
-- point the bridge at your relay with `REMODEX_RELAY`
-- scan the QR from the iPhone app once to trust the Mac
-- let reconnect reuse that trusted Mac over the same relay
-- remember that the built-in daemon path is currently macOS-only
-- keep private hostnames and credentials out of the public repo
+Push is optional and disabled by default. Keep live relay addresses, pairing identifiers, identity files, and notification credentials out of Git and logs.

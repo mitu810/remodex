@@ -550,8 +550,8 @@ struct TurnTimelineRowsSection: View {
 
     private var earlierMessagesButtonTitle: String {
         if isLoadingEarlierMessages {
-            return "Loading earlier messages..."
+            return String(localized: "Loading earlier messages...")
         }
-        return earlierMessagesErrorMessage ?? "Load earlier messages"
+        return earlierMessagesErrorMessage ?? String(localized: "Pull down or tap to load earlier messages")
     }
 }

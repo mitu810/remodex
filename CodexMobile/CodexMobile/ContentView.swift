@@ -321,7 +321,7 @@ struct ContentView: View {
                     manualPairingCode = ""
                 }
             } message: {
-                Text("Enter the pairing code shown on your Mac. Codes expire after five minutes; generate a new one if needed.")
+                Text("Enter the pairing code shown on your computer. Codes expire after five minutes.")
             }
             // Settings rides on a full-screen cover instead of `navigationPath`
             // so the gear tap inside the iOS 26 `safeAreaBar` header always
@@ -349,7 +349,7 @@ struct ContentView: View {
 
     private var settingsCoverContent: some View {
         NavigationStack {
-            SettingsView()
+            SettingsView(connectCredentialDevice: connectCredentialDevice)
                 .adaptiveNavigationBar()
                 .toolbar {
                     ToolbarItem(placement: .topBarTrailing) {
@@ -390,7 +390,7 @@ struct ContentView: View {
 
     private var deviceSwitchingOverlay: some View {
         DeviceSwitchingOverlayView(
-            title: "Switching device…",
+            title: String(localized: "Switching device…"),
             primaryStatus: switchingConnectionPhaseLabel,
             secondaryStatus: switchingSecureStatusLabel,
             deviceName: switchingDeviceName,
@@ -628,7 +628,7 @@ struct ContentView: View {
         case .thread(let threadID):
             nativeThreadDestination(threadID: threadID)
         case .settings:
-            SettingsView()
+            SettingsView(connectCredentialDevice: connectCredentialDevice)
                 .adaptiveNavigationBar()
         case .terminal(let preferredWorkingDirectory):
             TerminalScreen(preferredWorkingDirectory: preferredWorkingDirectory)
@@ -692,7 +692,7 @@ struct ContentView: View {
             shouldOfferWakeAction: shouldOfferWakeSavedMacDisplayAction,
             isPreparingManualScanner: isPreparingManualScanner,
             isResolvingManualPairingCode: isResolvingManualPairingCode,
-            offlinePrimaryButtonTitle: codex.hasReconnectCandidate ? "Reconnect" : "Scan QR Code",
+            offlinePrimaryButtonTitle: codex.hasReconnectCandidate ? String(localized: "Reconnect") : String(localized: "Scan QR Code"),
             onPrimaryAction: {
                 if homeConnectionPhase == .offline && !codex.hasReconnectCandidate {
                     presentAutomaticScanner()
@@ -775,7 +775,7 @@ struct ContentView: View {
                 statusMessage: codex.lastErrorMessage,
                 securityLabel: codex.secureConnectionState.statusLabel,
                 trustedPairPresentation: codex.trustedPairPresentation,
-                offlinePrimaryButtonTitle: codex.hasReconnectCandidate ? "Reconnect" : "Scan QR Code",
+                offlinePrimaryButtonTitle: codex.hasReconnectCandidate ? String(localized: "Reconnect") : String(localized: "Scan QR Code"),
                 onPrimaryAction: {
                     if homeConnectionPhase == .offline && !codex.hasReconnectCandidate {
                         presentAutomaticScanner()
@@ -846,7 +846,7 @@ struct ContentView: View {
                 statusMessage: codex.lastErrorMessage,
                 securityLabel: codex.secureConnectionState.statusLabel,
                 trustedPairPresentation: codex.trustedPairPresentation,
-                offlinePrimaryButtonTitle: codex.hasReconnectCandidate ? "Reconnect" : "Scan QR Code",
+                offlinePrimaryButtonTitle: codex.hasReconnectCandidate ? String(localized: "Reconnect") : String(localized: "Scan QR Code"),
                 onPrimaryAction: {
                     if homeConnectionPhase == .offline && !codex.hasReconnectCandidate {
                         presentAutomaticScanner()
@@ -913,7 +913,7 @@ struct ContentView: View {
     }
 
     private var manualPairingErrorAlertMessage: String {
-        manualPairingErrorMessage ?? "Could not resolve that pairing code."
+        manualPairingErrorMessage ?? String(localized: "Could not resolve that pairing code.")
     }
 
     // Offers a one-tap display wake for the best local-style relay we still know about, even if only the trusted record remains.
@@ -1808,6 +1808,11 @@ struct ContentView: View {
         isRetryingBridgeUpdate = true
 
         Task {
+            if codex.isConnected {
+                dismissPresentedRootSheet()
+                await codex.refreshBridgeVersionState()
+                return
+            }
             await viewModel.toggleConnection(codex: codex)
             await MainActor.run {
                 isRetryingBridgeUpdate = false
@@ -1893,12 +1898,12 @@ struct ContentView: View {
     // Keeps QR and code recovery as one quiet secondary row under the main reconnect CTA.
     private var reconnectSecondaryActions: some View {
         HStack(spacing: 10) {
-            secondaryReconnectActionButton("New QR Code") {
+            secondaryReconnectActionButton(String(localized: "New QR Code")) {
                 presentManualScannerAfterStoppingReconnect()
             }
             .disabled(isPreparingManualScanner)
 
-            secondaryReconnectActionButton("Pair with Code") {
+            secondaryReconnectActionButton(String(localized: "Pair with Code")) {
                 presentManualPairingEntryAfterStoppingReconnect()
             }
             .disabled(isPreparingManualScanner || isResolvingManualPairingCode)
@@ -1957,7 +1962,7 @@ struct ContentView: View {
 
         let pendingCode = manualPairingCode.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !pendingCode.isEmpty else {
-            manualPairingErrorMessage = "Enter a valid pairing code."
+            manualPairingErrorMessage = String(localized: "Enter a valid pairing code.")
             return
         }
         isResolvingManualPairingCode = true
@@ -2132,6 +2137,11 @@ struct ContentView: View {
         }
         codex.activeThreadId = snapshot.activeThreadId
         suppressAutomaticThreadSelection = snapshot.suppressAutomaticThreadSelection
+    }
+
+    private func connectCredentialDevice(_ deviceID: String) async throws {
+        if codex.isConnected, codex.secureSession?.macDeviceId == deviceID { return }
+        try await viewModel.switchToTrustedMac(deviceId: deviceID, codex: codex, interruptActiveTurns: false)
     }
 
     private func switchToTrustedMac(_ deviceId: String) {

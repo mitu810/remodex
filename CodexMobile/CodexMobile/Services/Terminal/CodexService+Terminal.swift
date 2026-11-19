@@ -56,7 +56,7 @@ extension CodexService {
             status: .starting,
             buffer: "",
             bufferData: Data(),
-            cwd: normalizedProfile.cwd,
+            cwd: requiresManualTerminalDirectory(normalizedProfile.cwd) ? "" : normalizedProfile.cwd,
             cols: cols,
             rows: rows,
             errorMessage: nil,
@@ -164,12 +164,15 @@ extension CodexService {
     func changeTerminalWorkingDirectory(_ cwd: String, terminalId: String) async throws {
         let trimmedCWD = cwd.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedCWD.isEmpty else { return }
+        guard let command = shellChangeDirectoryCommand(for: trimmedCWD) else {
+            throw CodexServiceError.invalidInput("Use cd in the SSH terminal to open this project.")
+        }
         updateTerminalSnapshot(for: terminalId) { snapshot in
             snapshot.cwd = trimmedCWD
         }
         guard terminalSnapshot(for: terminalId).status == .running else { return }
         try await writeTerminalInput(
-            Data(shellChangeDirectoryCommand(for: trimmedCWD).utf8),
+            Data(command.utf8),
             terminalId: terminalId
         )
     }
@@ -196,9 +199,9 @@ extension CodexService {
 
     private func sendInitialTerminalDirectoryCommandIfNeeded(_ cwd: String, terminalId: String) async {
         let trimmedCWD = cwd.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedCWD.isEmpty else { return }
+        guard !trimmedCWD.isEmpty, let command = shellChangeDirectoryCommand(for: trimmedCWD) else { return }
         try? await writeTerminalInput(
-            Data(shellChangeDirectoryCommand(for: trimmedCWD).utf8),
+            Data(command.utf8),
             terminalId: terminalId
         )
     }
@@ -254,8 +257,14 @@ extension CodexService {
         return value
     }
 
-    private func shellChangeDirectoryCommand(for cwd: String) -> String {
-        "cd \(shellSingleQuoted(cwd))\n"
+    private func shellChangeDirectoryCommand(for cwd: String) -> String? {
+        guard !requiresManualTerminalDirectory(cwd) else { return nil }
+        return "cd \(shellSingleQuoted(cwd))\n"
+    }
+
+    // Windows SSH profiles may open either cmd.exe or PowerShell, with different quoting rules.
+    func requiresManualTerminalDirectory(_ cwd: String) -> Bool {
+        bridgeHostPlatform == .windows || RemoteHostPath.isWindows(cwd)
     }
 
     private func shellSingleQuoted(_ value: String) -> String {

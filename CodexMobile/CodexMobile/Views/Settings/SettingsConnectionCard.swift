@@ -13,7 +13,7 @@ struct SettingsConnectionCard: View {
 
     var body: some View {
         SettingsCard(
-            title: "Device",
+            title: String(localized: "Device"),
             footer: keepAwakeFooter
         ) {
             if let trustedPairPresentation = codex.trustedPairPresentation {
@@ -23,7 +23,7 @@ struct SettingsConnectionCard: View {
                     onEditName: onEditComputerName
                 )
             } else {
-                SettingsInlineMessage(text: "No paired device yet. Scan the QR code from your Mac to connect.")
+                SettingsInlineMessage(text: String(localized: "No paired device yet. Scan the QR code from your computer to connect."))
             }
 
             if connectionPhaseShowsProgress {
@@ -62,7 +62,7 @@ struct SettingsConnectionCard: View {
                 }
             }
         }
-        .confirmationDialog("Disconnect from this Mac?", isPresented: $isShowingDisconnectConfirmation) {
+        .confirmationDialog("Disconnect from this \(codex.hostComputerLabel)?", isPresented: $isShowingDisconnectConfirmation) {
             Button("Disconnect", role: .destructive) {
                 disconnectRelay()
             }
@@ -75,11 +75,11 @@ struct SettingsConnectionCard: View {
         guard codex.supportsKeepAwakeWhileBridgeRuns else { return nil }
 
         if codex.keepMacAwakeWhileBridgeRuns {
-            return "Keeps your Mac reachable while the bridge is running. Best while charging."
+            return String(localized: "Keeps your \(codex.hostComputerLabel) reachable while the bridge is running. Best while charging.")
         }
 
         if !codex.isConnected {
-            return "Preference is saved on this iPhone and syncs when the bridge reconnects."
+            return String(localized: "Preference is saved on this iPhone and syncs when the bridge reconnects.")
         }
 
         return nil
@@ -109,26 +109,26 @@ struct SettingsConnectionCard: View {
     private var connectionStatusLabel: String {
         switch codex.connectionPhase {
         case .offline:
-            return "Offline"
+            return String(localized: "Offline")
         case .connecting:
-            return "Connecting"
+            return String(localized: "Connecting")
         case .loadingChats:
-            return "Loading"
+            return String(localized: "Loading")
         case .syncing:
-            return "Syncing"
+            return String(localized: "Syncing")
         case .connected:
-            return "Connected"
+            return String(localized: "Connected")
         }
     }
 
     private var connectionProgressLabel: String {
         switch codex.connectionPhase {
         case .connecting:
-            return "Connecting to relay…"
+            return String(localized: "Connecting to relay…")
         case .loadingChats:
-            return "Loading chats…"
+            return String(localized: "Loading chats…")
         case .syncing:
-            return "Syncing workspace…"
+            return String(localized: "Syncing workspace…")
         case .offline, .connected:
             return ""
         }

@@ -80,11 +80,11 @@ struct GPTVoiceSetupSheet: View {
                 .frame(width: 20, alignment: .leading)
 
             VStack(alignment: .leading, spacing: 4) {
-                Text(title)
+                Text(LocalizedStringKey(title))
                     .font(AppFont.subheadline(weight: .semibold))
                     .foregroundStyle(.primary)
                     .fixedSize(horizontal: false, vertical: true)
-                Text(detail)
+                Text(LocalizedStringKey(detail))
                     .font(AppFont.caption())
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)

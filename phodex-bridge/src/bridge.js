@@ -22,6 +22,11 @@ const {
   hasRelayConnectionGoneStale,
 } = require("./bridge-status");
 const { createCodexTransport } = require("./codex-transport");
+const {
+  accountError, activeCredentialFingerprint, credentialFingerprint, credentialIdentity,
+  queryCredential, readInstalledCredential, replaceCodexCredential,
+} = require("./account-credentials");
+const { resolveCodexHome } = require("./codex-home");
 const { createOpenCodeRuntime } = require("./opencode-runtime");
 const { createRelayWatchdog } = require("./relay-watchdog");
 const {
@@ -31,8 +36,8 @@ const {
 } = require("./rollout-watch");
 const { printQR } = require("./qr");
 const { rememberActiveThread } = require("./session-state");
-const { handleDesktopRequest } = require("./desktop-handler");
-const { readDaemonConfig, writeDaemonConfig } = require("./daemon-state");
+const { handleDesktopRequest, restartRunningCodexDesktop } = require("./desktop-handler");
+const { readDaemonConfig, resolveBridgeLogsDir, writeDaemonConfig } = require("./daemon-state");
 const { handleGitRequest } = require("./git-handler");
 const { handleThreadContextRequest } = require("./thread-context-handler");
 const { handleWorkspaceRequest, workspaceImageResponseFits } = require("./workspace-handler");
@@ -44,6 +49,7 @@ const {
   composeSanitizedAuthStatusFromSettledResults,
 } = require("./account-status");
 const { createBridgePackageVersionStatusReader } = require("./package-version-status");
+const { scheduleInstalledBridgeUpdate } = require("./bridge-release");
 const { createPushNotificationServiceClient } = require("./push-notification-service-client");
 const { createPushNotificationTracker } = require("./push-notification-tracker");
 const { resolveCodexGeneratedImagesRoot } = require("./codex-home");
@@ -114,6 +120,7 @@ const RELAY_HISTORY_RECENT_TURN_TARGET = 16;
 const RELAY_TURNS_LIST_TARGET_BUDGET_MS = 5_500;
 const RELAY_TURNS_LIST_BUDGET_RESERVE_MS = 1_000;
 const RELAY_TURNS_LIST_MAX_INITIAL_LIMIT = 5;
+const RELAY_TURNS_LIST_MAX_OLDER_LIMIT = 20;
 const RELAY_TURNS_LIST_SAFE_RETRY_LIMIT = 5;
 const RELAY_JSONL_TURNS_LIST_CACHE_TTL_MS = 30_000;
 const RELAY_JSONL_LATEST_TURN_MAX_TAIL_BYTES = 512 * 1024;
@@ -134,9 +141,6 @@ const RELAY_JSONL_FULL_ARTIFACT_FALLBACK_MAX_BYTES = Math.max(
   0,
   bufferConstants.MAX_STRING_LENGTH - (8 * 1024 * 1024)
 );
-const BRIDGE_PACKAGE_UPDATE_COMMAND = "npm install -g remodex@latest";
-const BRIDGE_PACKAGE_UPDATE_TIMEOUT_MS = 180_000;
-const BRIDGE_RESTART_AFTER_UPDATE_DELAY_MS = 750;
 const MODELS_WITHOUT_REASONING_SUMMARY = new Set([
   "gpt-5.3-codex-spark",
 ]);
@@ -715,12 +719,63 @@ function alignThreadTurnsListResponseToAnchor(response, anchorTurnId) {
   };
 }
 
-function startBridge({
+// Keep the service owner and its lock while replacing the entire paired bridge
+// session and its owned app-server. Foreground and native services use the same path.
+function createBridgeSessionSupervisor(startSession, { restartDelayMs = 500 } = {}) {
+  let session;
+  let restarting;
+  let stopped = false;
+
+  function scheduleRestart(afterStop) {
+    if (restarting) return restarting;
+    const previous = session;
+    restarting = (async () => {
+      // Allow the encrypted apply response to reach the phone first.
+      await new Promise((resolve) => setTimeout(resolve, restartDelayMs));
+      if (stopped) return;
+      await previous.stop();
+      const desktopRestartFailed = !stopped && await afterStop?.();
+      if (!stopped) {
+        session = startSession({ relaySessionId: previous.relaySessionId, scheduleRestart, desktopRestartFailed });
+      }
+    })().finally(() => { restarting = null; });
+    return restarting;
+  }
+
+  session = startSession({ scheduleRestart });
+  return {
+    stop() {
+      stopped = true;
+      return session.stop();
+    },
+  };
+}
+
+function startBridge(options = {}) {
+  const supervisor = createBridgeSessionSupervisor((lifecycle) =>
+    startBridgeSession(options, { ...lifecycle, requestExit }));
+  process.on("SIGINT", requestExit);
+  process.on("SIGTERM", requestExit);
+  return {
+    stop() {
+      process.off("SIGINT", requestExit);
+      process.off("SIGTERM", requestExit);
+      return supervisor.stop();
+    },
+  };
+
+  function requestExit() {
+    supervisor.stop().catch(() => {});
+    setTimeout(() => process.exit(0), 100);
+  }
+}
+
+function startBridgeSession({
   config: explicitConfig = null,
   printPairingQr = true,
   onPairingSession = null,
   onBridgeStatus = null,
-} = {}) {
+}, { relaySessionId, scheduleRestart, requestExit, desktopRestartFailed = false }) {
   const config = explicitConfig || readBridgeConfig();
   const catalogDeletionScope = config.codexEndpoint ? null : randomBytes(16).toString("hex");
   config.keepMacAwakeEnabled = config.keepMacAwakeEnabled === true;
@@ -758,7 +813,7 @@ function startBridge({
     iosAppVersion: deviceState.lastSeenPhoneAppVersion,
   });
   logIOSAppCompatibilityWarning(cachedIOSAppCompatibilityWarning);
-  const sessionId = relaySession.sessionId;
+  const sessionId = relaySessionId ?? relaySession.sessionId;
   const relaySessionUrl = `${relayBaseUrl}/${sessionId}`;
   const notificationSecret = randomBytes(24).toString("hex");
   const desktopRefresher = new CodexDesktopRefresher({
@@ -811,6 +866,13 @@ function startBridge({
   const openCodeThreadCatalog = new Map();
   const archivedOpenCodeThreadCatalog = new Map();
   let openCodeCatalogRefresh = null;
+  let credentialOperation = null;
+  let pendingCredentialReload = false;
+  let credentialRestartScheduled = false;
+  let shutdownPromise;
+  let stopPromise;
+  let resolveCodexClosed;
+  const codexClosed = new Promise((resolve) => { resolveCodexClosed = resolve; });
   const desktopIpcLiveOwnerObservedInboundKeys = new Set();
   const jsonlTurnsListRolloutCacheByThread = new Map();
   const jsonlTurnsListRolloutMissCacheByThread = new Map();
@@ -1003,6 +1065,7 @@ function startBridge({
   codex.onError(handleCodexTransportError);
 
   function handleCodexTransportError(error) {
+    if (isShuttingDown) return;
     codexLaunchState = "error";
     publishBridgeStatus({
       state: "error",
@@ -1064,6 +1127,7 @@ function startBridge({
   }
 
   function prepareBridgeShutdown() {
+    if (isShuttingDown) return shutdownPromise;
     isShuttingDown = true;
     bridgeWakeAssertion.stop();
     clearReconnectTimer();
@@ -1078,25 +1142,34 @@ function startBridge({
     archivedOpenCodeThreadCatalog.clear();
     pendingLocalThreadCreationRequestsById.clear();
     openCodeThreadCatalog.clear();
-    Promise.resolve().then(() => openCodeRuntime.shutdown()).catch((error) => {
+    shutdownPromise = Promise.resolve().then(() => openCodeRuntime.shutdown()).catch((error) => {
       console.warn(`[remodex] OpenCode shutdown failed: ${error?.message || "unknown error"}`);
     });
+    return shutdownPromise;
   }
 
   function stopBridge() {
-    if (isShuttingDown) {
-      return;
-    }
+    if (stopPromise) return stopPromise;
 
-    prepareBridgeShutdown();
+    const openCodeClosed = prepareBridgeShutdown();
     desktopRefresher.handleTransportReset();
     failBridgeManagedCodexRequests(new Error("Bridge stopped before the request completed."));
     forwardedRequestMethodsById.clear();
 
-    if (socket?.readyState === WebSocket.OPEN || socket?.readyState === WebSocket.CONNECTING) {
-      socket.close();
-    }
-    codex.shutdown();
+    const closingSocket = socket;
+    const relayClosed = closingSocket && closingSocket.readyState !== WebSocket.CLOSED
+      ? new Promise((resolve) => closingSocket.once("close", resolve))
+      : Promise.resolve();
+    closingSocket?.terminate();
+    codex.shutdown({ forceAfterMs: 5_000 });
+    let timeout;
+    stopPromise = Promise.race([
+      Promise.all([relayClosed, openCodeClosed, codexClosed]),
+      new Promise((_, reject) => {
+        timeout = setTimeout(() => reject(new Error("Timed out stopping the old bridge and Codex runtime.")), 12_000);
+      }),
+    ]).finally(() => clearTimeout(timeout));
+    return stopPromise;
   }
 
   function startRelayWatchdog(trackedSocket) {
@@ -1141,7 +1214,7 @@ function startBridge({
 
     if (closeCode === 4000 || closeCode === 4001) {
       logConnectionStatus("disconnected");
-      shutdown(codex, () => socket, prepareBridgeShutdown);
+      requestExit();
       return;
     }
 
@@ -1182,6 +1255,7 @@ function startBridge({
     socket = nextSocket;
 
     nextSocket.on("open", () => {
+      if (isShuttingDown) return;
       markRelayActivity();
       clearReconnectTimer();
       reconnectAttempt = 0;
@@ -1192,6 +1266,7 @@ function startBridge({
     });
 
     nextSocket.on("message", (data) => {
+      if (isShuttingDown) return;
       markRelayActivity();
       const message = typeof data === "string" ? data : data.toString("utf8");
       if (secureTransport.handleIncomingWireMessage(message, {
@@ -1285,6 +1360,7 @@ function startBridge({
   });
 
   codex.onClose(() => {
+    resolveCodexClosed();
     activityStore.markSourceStale(APP_SERVER_SOURCE);
     const wasShuttingDown = isShuttingDown;
     clearRelayWatchdog();
@@ -1312,13 +1388,25 @@ function startBridge({
     }
   });
 
-  process.on("SIGINT", () => shutdown(codex, () => socket, prepareBridgeShutdown));
-  process.on("SIGTERM", () => shutdown(codex, () => socket, prepareBridgeShutdown));
-
   // Routes decrypted app payloads through the same bridge handlers as before.
   function handleApplicationMessage(rawMessage) {
     rawMessage = normalizePhoneRuntimeRequest(rawMessage);
     const parsedMessage = parseBridgeMessage(rawMessage);
+    if (handleCredentialRequest(parsedMessage)) return;
+    if ((credentialOperation === "apply" || pendingCredentialReload)
+      && ["turn/start", "turn/steer", "review/start"].includes(parsedMessage?.method)
+      && (credentialRestartScheduled || !isOpenCodeRequest(parsedMessage, openCodeRuntime))) {
+      if (parsedMessage.id != null) {
+        const message = pendingCredentialReload
+          ? (credentialRestartScheduled
+            ? "This device is restarting to use the new Codex credential."
+            : "Restart Remodex on this device to use the new Codex credential.")
+          : "A Codex credential is being applied on this device. Try again shortly.";
+        sendApplicationResponse(createJsonRpcErrorResponse(parsedMessage.id,
+          accountError("account_restart_required", message), "account_restart_required"));
+      }
+      return;
+    }
     // Register history/list response shaping before either runtime can reply.
     rememberForwardedRequestMethod(rawMessage);
     if (rejectDesktopHandoffMutation(parsedMessage)) return;
@@ -1385,7 +1473,7 @@ function startBridge({
     if (handleThreadContextRequest(rawMessage, sendApplicationResponse, parsedMessage)) {
       return;
     }
-    if (handleWorkspaceRequest(rawMessage, sendApplicationResponse)) {
+    if (handleWorkspaceRequest(rawMessage, sendApplicationResponse, secureTransport.captureTransientApplicationSender)) {
       return;
     }
     if (handleProjectRequest(rawMessage, sendApplicationResponse)) {
@@ -1858,6 +1946,114 @@ function startBridge({
 
   // ─── Bridge-owned auth snapshot ─────────────────────────────
 
+  function handleCredentialRequest(parsed) {
+    const autoRestart = parsed?.method === "remodex/accountCredential/applyAndRestart";
+    const isApply = autoRestart || parsed?.method === "remodex/accountCredential/apply";
+    if (!isApply && parsed?.method !== "remodex/accountCredential/check") return false;
+    if (parsed.id == null) return true;
+    const reply = secureTransport.captureTransientApplicationSender();
+    const fail = (error) => reply(createJsonRpcErrorResponse(parsed.id,
+      error?.errorCode ? error : accountError("account_credential_failed", "The paired device could not complete the credential operation."),
+      "account_credential_failed"));
+    if (parsed.params?.deviceId !== deviceState.macDeviceId) {
+      fail(accountError("account_wrong_device", "The connected device does not match the selected device."));
+      return true;
+    }
+    if (credentialOperation || credentialRestartScheduled) {
+      fail(accountError("account_operation_busy", "This device is already handling a credential operation."));
+      return true;
+    }
+    credentialOperation = isApply ? "apply" : "check";
+    handleCredentialOperation(parsed.params, isApply)
+      .then((result) => {
+        const restartScheduled = autoRestart && result.restartRequired;
+        credentialRestartScheduled = restartScheduled;
+        try {
+          reply(JSON.stringify({ id: parsed.id, result: autoRestart ? { restartScheduled } : result }));
+        } finally {
+          if (restartScheduled) {
+            scheduleRestart(async () => {
+              try {
+                await restartRunningCodexDesktop({
+                  codexHome: resolveCodexHome(),
+                  appPath: config.codexAppPath,
+                  bundleId: config.codexBundleId,
+                });
+                return false;
+              } catch {
+                console.warn("[remodex] The desktop client did not restart after the credential update.");
+                return true;
+              }
+            }).catch((error) => {
+              console.error(`[remodex] Credential restart failed: ${error.message}`);
+              process.exit(1);
+            });
+          }
+        }
+      })
+      .catch(fail)
+      .finally(() => { credentialOperation = null; });
+    return true;
+  }
+
+  async function handleCredentialOperation(params, isApply) {
+    const identity = credentialIdentity(params.credential);
+    if (!identity) throw accountError("invalid_account_credential", "Select a Codex ChatGPT auth.json file.");
+    const home = resolveCodexHome();
+    if (isApply) {
+      if (codex.mode !== "spawn") {
+        throw accountError("account_external_runtime", "Credential replacement requires a Codex process managed by this bridge.");
+      }
+      const configSnapshot = await sendCodexRequest("config/read", { includeLayers: false });
+      const storageMode = configSnapshot?.config?.cli_auth_credentials_store
+        ?? configSnapshot?.config?.cliAuthCredentialsStore;
+      if (storageMode && storageMode !== "file") {
+        throw accountError("account_file_storage_required", "Set Codex credential storage to file on this device before replacing its credential.");
+      }
+      if (pendingAuthLogin.requestId || pendingAuthLogin.loginId
+        || activityStore.snapshot().entries.some((entry) => entry.runtime === "active")) {
+        throw accountError("account_runtime_busy", "Finish active Codex runs and sign-ins before applying a credential.");
+      }
+      const result = replaceCodexCredential(home, params.credential);
+      if (result.restartRequired) pendingCredentialReload = true;
+      if (!pendingCredentialReload) {
+        const fingerprint = await readActiveCredentialFingerprint();
+        pendingCredentialReload = desktopRestartFailed || fingerprint !== credentialFingerprint(params.credential);
+      }
+      return { restartRequired: pendingCredentialReload };
+    }
+
+    let installed;
+    try { installed = readInstalledCredential(home); } catch {}
+    let matchesInstalled = false;
+    if (installed) {
+      try { matchesInstalled = credentialIdentity(installed) === identity; } catch {}
+    }
+    if (!matchesInstalled || codex.mode !== "spawn") {
+      return queryCredential(params.credential, { renew: params.renew === true, appPath: config.codexAppPath });
+    }
+    if (pendingCredentialReload) {
+      throw accountError("account_restart_required", "Restart Remodex on this device before checking the new Codex account.");
+    }
+    const [userId, workspaceId] = JSON.parse(identity);
+    const account = await sendCodexRequest("account/read", { refreshToken: false });
+    if (account?.account?.type !== "chatgpt" || (account.userId && account.userId !== userId)
+      || (workspaceId && account.workspaceRouting?.chatgptAccountId && account.workspaceRouting.chatgptAccountId !== workspaceId)) {
+      throw accountError("account_restart_required", "Restart Remodex on this device before checking the new Codex account.");
+    }
+    const result = {};
+    if (params.renew === true) {
+      try { await sendCodexRequest("account/read", { refreshToken: true }); }
+      catch { result.renewalFailed = true; }
+    }
+    try { result.usage = await sendCodexRequest("account/rateLimits/read", {}); }
+    catch { result.usageUnavailable = true; }
+    const latest = readInstalledCredential(home);
+    if (latest && latest !== params.credential && credentialIdentity(latest) === identity) result.credential = latest;
+    if (params.renew === true && latest === installed) result.renewalFailed = true;
+    return result;
+  }
+
   // Handles the bridge-owned auth status wrappers without exposing tokens to the phone.
   // This dispatcher stays synchronous so non-account messages can continue down the normal routing chain.
   function handleBridgeManagedAccountRequest(rawMessage, sendResponse, parsedMessage = null) {
@@ -1908,19 +2104,22 @@ function startBridge({
 
   // Combines account/read + getAuthStatus into one safe snapshot for the phone UI.
   // The two RPCs are settled independently so one transient failure does not hide the other.
-  async function readSanitizedAuthStatus() {
+  async function readSanitizedAuthStatus({ refreshToken = true } = {}) {
+    if (pendingCredentialReload && credentialRestartScheduled) {
+      throw accountError("account_restart_in_progress", "This device is restarting to use the new Codex credential.");
+    }
     const [accountReadResult, authStatusResult, bridgeVersionInfoResult] = await Promise.allSettled([
       sendCodexRequest("account/read", {
         refreshToken: false,
       }),
       sendCodexRequest("getAuthStatus", {
         includeToken: true,
-        refreshToken: true,
+        refreshToken: refreshToken && credentialOperation !== "apply" && !pendingCredentialReload,
       }),
       readBridgePackageVersionStatus(),
     ]);
 
-    return composeSanitizedAuthStatusFromSettledResults({
+    const snapshot = composeSanitizedAuthStatusFromSettledResults({
       accountReadResult: accountReadResult.status === "fulfilled"
         ? {
           status: "fulfilled",
@@ -1935,6 +2134,25 @@ function startBridge({
       transportMode: codex.mode,
       hostPlatform: process.platform,
     });
+    const account = accountReadResult.value;
+    const authStatus = authStatusResult.value;
+    const fingerprint = pendingCredentialReload ? null : activeCredentialFingerprint(account, authStatus);
+    if (fingerprint) {
+      snapshot.managedCredentialStatus = { fingerprint, desktopRestartFailed };
+    } else if (!pendingCredentialReload && accountReadResult.status === "fulfilled"
+      && (account?.account == null || !["chatgpt", "chatgptAuthTokens"].includes(account.account.type))) {
+      snapshot.managedCredentialStatus = { signedIn: false };
+    }
+    return snapshot;
+  }
+
+  async function readActiveCredentialFingerprint() {
+    try {
+      const snapshot = await readSanitizedAuthStatus({ refreshToken: false });
+      return snapshot.managedCredentialStatus?.fingerprint ?? null;
+    } catch {
+      return null;
+    }
   }
 
   // Opens the ChatGPT sign-in URL in the default browser on the bridge Mac.
@@ -2553,64 +2771,30 @@ function startBridge({
     return readBridgePreferences();
   }
 
+  let bridgeUpdatePending = false;
   async function updateBridgePackageAndRestart() {
-    if (process.platform !== "darwin") {
-      const error = new Error("Bridge self-update is available only for the macOS bridge service.");
-      error.errorCode = "unsupported_platform";
-      error.userMessage = error.message;
-      throw error;
+    if (bridgeUpdatePending) {
+      throw Object.assign(new Error("A bridge update is already scheduled."), { errorCode: "bridge_update_in_progress" });
     }
-
+    bridgeUpdatePending = true;
     try {
-      await execFileAsync("/bin/zsh", [
-        "-lc",
-        [
-          "export TERM=dumb",
-          "source ~/.zshrc >/dev/null 2>/dev/null || true",
-          BRIDGE_PACKAGE_UPDATE_COMMAND,
-        ].join("; "),
-      ], {
-        timeout: BRIDGE_PACKAGE_UPDATE_TIMEOUT_MS,
-        maxBuffer: 2 * 1024 * 1024,
-      });
+      const version = await scheduleInstalledBridgeUpdate({ logsDir: resolveBridgeLogsDir() });
+      // Keep an installation in flight while its independent worker takes over.
+      const reset = setTimeout(() => { bridgeUpdatePending = false; }, 5 * 60_000);
+      reset.unref();
+      return { success: true, version, restartScheduled: true };
     } catch (error) {
-      const nextError = new Error(
-        truncateCommandOutput(error?.stderr || error?.stdout || error?.message)
-          || "Could not update the Remodex bridge package on this Mac."
-      );
-      nextError.errorCode = "bridge_update_failed";
-      nextError.userMessage = nextError.message;
-      nextError.cause = error;
-      throw nextError;
+      bridgeUpdatePending = false;
+      const message = truncateCommandOutput(error?.stderr || error?.message) || "Could not schedule the bridge update.";
+      throw Object.assign(new Error(message, { cause: error }), {
+        errorCode: "bridge_update_failed",
+        userMessage: message,
+      });
     }
-
-    scheduleBridgeServiceRestartAfterUpdate();
-    return {
-      success: true,
-      command: BRIDGE_PACKAGE_UPDATE_COMMAND,
-      restartScheduled: true,
-      restartDelayMs: BRIDGE_RESTART_AFTER_UPDATE_DELAY_MS,
-    };
-  }
-
-  // Restarts after the RPC response has crossed the encrypted phone channel.
-  function scheduleBridgeServiceRestartAfterUpdate() {
-    const restartTimer = setTimeout(() => {
-      const cliPath = path.join(__dirname, "..", "bin", "remodex.js");
-      const child = spawn(process.execPath, [cliPath, "restart"], {
-        detached: true,
-        stdio: "ignore",
-        env: process.env,
-      });
-      child.on?.("error", (error) => {
-        console.warn(`[remodex] Failed to schedule the post-update bridge restart: ${error?.message || error}`);
-      });
-      child.unref?.();
-    }, BRIDGE_RESTART_AFTER_UPDATE_DELAY_MS);
-    restartTimer.unref?.();
   }
 
   return {
+    relaySessionId: sessionId,
     stop: stopBridge,
   };
 }
@@ -2778,19 +2962,6 @@ function shortFingerprint(value) {
     return null;
   }
   return createHash("sha256").update(normalized).digest("hex").slice(0, 8);
-}
-
-function shutdown(codex, getSocket, beforeExit = () => {}) {
-  beforeExit();
-
-  const socket = getSocket();
-  if (socket?.readyState === WebSocket.OPEN || socket?.readyState === WebSocket.CONNECTING) {
-    socket.close();
-  }
-
-  codex.shutdown();
-
-  setTimeout(() => process.exit(0), 100);
 }
 
 // Forces app-server summary generation off for models whose Responses API calls
@@ -3064,8 +3235,11 @@ async function fetchAdaptiveThreadTurnsListForRelay(request, {
   }
 
   const params = request?.params;
+  const maximumLimit = hasRelayCursor(params?.cursor)
+    ? RELAY_TURNS_LIST_MAX_OLDER_LIMIT
+    : RELAY_TURNS_LIST_MAX_INITIAL_LIMIT;
   const requestedLimit = Number.isInteger(params?.limit) && params.limit > 0
-    ? Math.min(params.limit, RELAY_TURNS_LIST_MAX_INITIAL_LIMIT)
+    ? Math.min(params.limit, maximumLimit)
     : 1;
   const sanitizeContext = buildThreadTurnsListRelaySanitizeContext(request, {
     skipJsonlArtifactAugmentation: true,
@@ -3357,7 +3531,7 @@ function selectAdaptiveTurnsListBatchLimit(fetchedTurnCount, remainingTurnCount)
   if (fetchedTurnCount <= 1) {
     return Math.min(4, remainingTurnCount);
   }
-  return remainingTurnCount;
+  return Math.min(RELAY_TURNS_LIST_SAFE_RETRY_LIMIT, remainingTurnCount);
 }
 
 function buildAdaptiveTurnsListPageParams(baseParams, limit, cursor) {
@@ -5701,6 +5875,7 @@ module.exports = {
   buildThreadTurnsListRelaySanitizeContext,
   buildHeartbeatBridgeStatus,
   canonicalThreadTurnsListRequest,
+  createBridgeSessionSupervisor,
   createMacOSBridgeWakeAssertion,
   createThreadTurnsListFastPageCoordinator,
   decodeOpenCodeThreadListCursor,

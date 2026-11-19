@@ -563,7 +563,7 @@ extension CodexThread {
 
     // Stable key for grouping threads by the project a chat belongs to.
     var projectGroupKey: String {
-        projectGroupPath ?? Self.noProjectGroupKey
+        projectGroupPath.map(RemoteHostPath.projectGroupKey) ?? Self.noProjectGroupKey
     }
 
     // User-facing project label shown in the sidebar section header.
@@ -592,7 +592,7 @@ extension CodexThread {
             return noProjectDisplayName
         }
 
-        let baseLabel = projectBaseDisplayName(for: normalizedProjectPath)
+        let baseLabel = normalizedProjectPath.pathDisplayName
         guard let worktreeToken = codexManagedWorktreeDisplayToken(for: normalizedProjectPath) else {
             return baseLabel
         }
@@ -762,106 +762,11 @@ extension CodexThread {
     }
 
     private static func normalizeProjectPath(_ value: String?) -> String? {
-        guard let value else {
-            return nil
-        }
-
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
-            return nil
-        }
-
-        if let normalizedRootPath = normalizedFilesystemRootPath(trimmed) {
-            return normalizedRootPath
-        }
-
-        var normalized = trimmed
-        while normalized.hasSuffix("/") {
-            normalized.removeLast()
-        }
-
-        if normalized.isEmpty {
-            return "/"
-        }
-
-        guard isLikelyFilesystemPath(normalized) else {
-            return nil
-        }
-
-        return normalized
-    }
-
-    // Preserves valid filesystem roots that would otherwise be mangled by generic trailing-slash trimming.
-    private static func normalizedFilesystemRootPath(_ value: String) -> String? {
-        if value == "/" {
-            return "/"
-        }
-
-        if value.first == "~", value.dropFirst().allSatisfy({ $0 == "/" }) {
-            return "~/"
-        }
-
-        let utf16View = value.utf16
-        guard utf16View.count >= 3 else {
-            return nil
-        }
-
-        let startIndex = utf16View.startIndex
-        let first = utf16View[startIndex]
-        let second = utf16View[utf16View.index(after: startIndex)]
-        let thirdIndex = utf16View.index(startIndex, offsetBy: 2)
-        let third = utf16View[thirdIndex]
-        let isDriveLetter = (65...90).contains(first) || (97...122).contains(first)
-        guard isDriveLetter, second == 58, third == 92 || third == 47 else {
-            return nil
-        }
-
-        let remainder = value.dropFirst(3)
-        guard remainder.allSatisfy({ $0 == "/" || $0 == "\\" }) else {
-            return nil
-        }
-
-        let drive = UnicodeScalar(first).map(String.init) ?? "C"
-        return "\(drive):/"
-    }
-
-    // Rejects pseudo-buckets like `server` or `_default` so only real local paths create project groups.
-    private static func isLikelyFilesystemPath(_ value: String) -> Bool {
-        if value == "/" {
-            return true
-        }
-
-        if value.hasPrefix("/") || value.hasPrefix("~/") {
-            return true
-        }
-
-        let utf16View = value.utf16
-        guard utf16View.count >= 3 else {
-            return false
-        }
-
-        let first = utf16View[utf16View.startIndex]
-        let second = utf16View[utf16View.index(after: utf16View.startIndex)]
-        let third = utf16View[utf16View.index(utf16View.startIndex, offsetBy: 2)]
-        let isDriveLetter = (65...90).contains(first) || (97...122).contains(first)
-        if isDriveLetter, second == 58, third == 92 || third == 47 {
-            return true
-        }
-
-        return value.hasPrefix("\\\\")
-    }
-
-    private static func projectBaseDisplayName(for normalizedProjectPath: String) -> String {
-        let lastComponent = (normalizedProjectPath as NSString).lastPathComponent
-        if !lastComponent.isEmpty, lastComponent != "/" {
-            return lastComponent
-        }
-
-        return normalizedProjectPath
+        RemoteHostPath.projectPath(value)
     }
 
     private static func codexManagedWorktreeToken(for normalizedProjectPath: String) -> String? {
-        let components = URL(fileURLWithPath: normalizedProjectPath).standardized.pathComponents
+        let components = RemoteHostPath.slashPath(normalizedProjectPath).split(separator: "/")
         guard let worktreesIndex = components.firstIndex(of: "worktrees"),
               worktreesIndex > 0,
               components[worktreesIndex - 1] == ".codex" else {

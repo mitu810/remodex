@@ -4,13 +4,15 @@
 // Exports: handleDesktopRequest
 // Depends on: child_process, fs, os, path, ./rollout-watch
 
-const { execFile } = require("child_process");
+const { execFile, spawn } = require("child_process");
 const fs = require("fs");
+const os = require("os");
 const path = require("path");
 const { promisify } = require("util");
 const { findRolloutFileForThread, resolveSessionsRoot } = require("./rollout-watch");
 
 const { DEFAULT_CODEX_BUNDLE_ID, resolveCodexAppPath } = require("./codex-desktop-app");
+const { runPowerShell } = require("./powershell");
 
 const execFileAsync = promisify(execFile);
 const DEFAULT_PLATFORM = process.platform;
@@ -517,6 +519,106 @@ async function forceRelaunchCodexApp({
   await sleepFn(appBootWaitMs);
 }
 
+// Restart only the desktop client in the same local account as the managed
+// app-server. A custom CODEX_HOME belongs to a separate runtime.
+async function restartRunningCodexDesktop({
+  codexHome,
+  appPath,
+  bundleId,
+  platform = process.platform,
+  fsModule = fs,
+  executor = execFileAsync,
+  spawnImpl = spawn,
+  powershell = runPowerShell,
+  homeDir = os.homedir(),
+  processImpl = process,
+} = {}) {
+  if (path.resolve(codexHome) !== path.resolve(homeDir, ".codex")) return;
+  if (platform === "darwin") {
+    const bundle = resolveCodexAppPath({ appPath, bundleId, platform, homeDir, fsImpl: fsModule });
+    const infoPath = path.join(bundle, "Contents", "Info.plist");
+    if (!bundle || !fsModule.existsSync(infoPath)) return;
+    const matchingArgs = await codexAppProcessArgs(bundle, infoPath, executor, fsModule);
+    if (!matchingArgs) return;
+    const processArgs = ["-u", String(processImpl.getuid()), ...matchingArgs];
+    const checkAppRunning = () => detectRunningCodexApp(processArgs, executor);
+    if (!await checkAppRunning()) return;
+    await forceRelaunchCodexApp({
+      openApp: () => executor("/usr/bin/open", ["-a", bundle], { timeout: HANDOFF_TIMEOUT_MS }),
+      executor, processArgs, checkAppRunning, sleepFn: sleep,
+      relaunchWaitMs: DEFAULT_RELAUNCH_WAIT_MS, appBootWaitMs: 0,
+    });
+  } else if (platform === "win32") {
+    // Use the Store package manifest and the current desktop session to avoid
+    // matching a standalone codex.exe or another user's running client.
+    powershell(`
+      $session = (Get-Process -Id $PID).SessionId
+      if ($session -eq 0) { return }
+      foreach ($package in @(Get-AppxPackage -Name OpenAI.Codex)) {
+        $manifest = Get-AppxPackageManifest -Package $package.PackageFullName
+        foreach ($app in @($manifest.Package.Applications.Application)) {
+          if (!$app.Executable) { continue }
+          $exe = Join-Path $package.InstallLocation $app.Executable
+          $name = [IO.Path]::GetFileNameWithoutExtension($exe)
+          $running = @(Get-Process -Name $name -ErrorAction SilentlyContinue |
+            Where-Object { $_.SessionId -eq $session -and $_.Path -eq $exe })
+          if (!$running.Count) { continue }
+          $ids = @($running | ForEach-Object { $_.Id })
+          $parents = @{}
+          foreach ($client in $running) {
+            $parents[$client.Id] = (Get-CimInstance Win32_Process -Filter "ProcessId = $($client.Id)").ParentProcessId
+          }
+          foreach ($client in @($running | Where-Object { $parents[$_.Id] -notin $ids })) {
+            if ($client.HasExited) { continue }
+            if (!$client.CloseMainWindow() -or !$client.WaitForExit(3000)) {
+              $client.Kill()
+              if (!$client.WaitForExit(3000)) { throw 'Timed out closing ChatGPT desktop.' }
+            }
+          }
+          Start-Process explorer.exe ('shell:AppsFolder\\' + $package.PackageFamilyName + '!' + $app.Id)
+          return
+        }
+      }
+    `);
+  } else if (platform === "linux") {
+    await restartLinuxCodexDesktop({ codexHome, homeDir, fsModule, spawnImpl, processImpl });
+  }
+}
+
+async function restartLinuxCodexDesktop({ codexHome, homeDir, fsModule, spawnImpl, processImpl }) {
+  const executable = "/usr/lib/chatgpt/ChatGPT";
+  const launcher = "/usr/bin/chatgpt";
+  if (!fsModule.existsSync(executable) || !fsModule.existsSync(launcher)) return;
+  for (const pid of fsModule.readdirSync("/proc").filter((entry) => /^\d+$/.test(entry))) {
+    const proc = `/proc/${pid}`;
+    let desktopEnv;
+    try {
+      if (fsModule.statSync(proc).uid !== processImpl.getuid() || fsModule.readlinkSync(`${proc}/exe`) !== executable) continue;
+      const args = fsModule.readFileSync(`${proc}/cmdline`, "utf8").split("\0");
+      if (args.some((arg) => arg.startsWith("--type="))) continue;
+      desktopEnv = Object.fromEntries(fsModule.readFileSync(`${proc}/environ`, "utf8")
+        .split("\0").filter((entry) => entry.includes("="))
+        .map((entry) => [entry.slice(0, entry.indexOf("=")), entry.slice(entry.indexOf("=") + 1)]));
+      if (path.resolve(desktopEnv.CODEX_HOME || path.join(homeDir, ".codex")) !== path.resolve(codexHome)) continue;
+      if (!desktopEnv.DISPLAY && !desktopEnv.WAYLAND_DISPLAY) continue;
+      processImpl.kill(Number(pid), "SIGTERM");
+    } catch (error) {
+      if (["ENOENT", "ESRCH", "EACCES"].includes(error.code)) continue;
+      throw error;
+    }
+    await waitForAppExit(() => {
+      try { return fsModule.readlinkSync(`${proc}/exe`) === executable; }
+      catch (error) { if (error.code === "ENOENT") return false; throw error; }
+    });
+    const launchEnv = Object.fromEntries(Object.entries(desktopEnv).filter(([key]) =>
+      /^(HOME|USER|LOGNAME|PATH|SHELL|LANG|LC_[A-Z_]+|DISPLAY|WAYLAND_DISPLAY|XAUTHORITY|DBUS_SESSION_BUS_ADDRESS|DESKTOP_SESSION|XDG_[A-Z_]+)$/.test(key)));
+    const child = spawnImpl(launcher, [], { cwd: homeDir, env: launchEnv, detached: true, stdio: "ignore" });
+    await new Promise((resolve, reject) => child.once("spawn", resolve).once("error", reject));
+    child.unref();
+    return;
+  }
+}
+
 async function waitForAppExit(checkAppRunning) {
   const deadline = Date.now() + HANDOFF_TIMEOUT_MS;
 
@@ -561,4 +663,5 @@ function sleep(ms) {
 
 module.exports = {
   handleDesktopRequest,
+  restartRunningCodexDesktop,
 };

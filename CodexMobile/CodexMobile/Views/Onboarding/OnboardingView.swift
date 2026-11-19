@@ -31,8 +31,8 @@ struct OnboardingView: View {
                     OnboardingStepPage(
                         stepNumber: 1,
                         icon: "terminal",
-                        title: "Install Codex CLI",
-                        description: "The AI coding agent that lives in your terminal. Remodex connects to it from your iPhone.",
+                        title: String(localized: "Install Codex CLI"),
+                        description: String(localized: "The AI coding agent that lives in your terminal. Remodex connects to it from your iPhone."),
                         command: codexInstallCommand
                     )
                     .tag(2)
@@ -40,19 +40,17 @@ struct OnboardingView: View {
                     OnboardingStepPage(
                         stepNumber: 2,
                         icon: "link",
-                        title: "Install the Bridge",
-                        description: "A lightweight relay that securely connects your device to your iPhone.",
-                        command: "npm install -g remodex@latest",
-                        commandCaption: "Remodex can keep your device awake with macOS caffeinate while the bridge is running, but it starts disabled by default. You can enable it later in Settings if you want."
+                        title: String(localized: "Install the Bridge"),
+                        description: String(localized: "Download the server kit from GitHub and follow its installation guide on your computer."),
+                        releaseURL: RemodexBridgeRelease.url
                     )
                     .tag(3)
 
                     OnboardingStepPage(
                         stepNumber: 3,
                         icon: "qrcode.viewfinder",
-                        title: "Start Pairing",
-                        description: "Run this on your device. A QR code will appear in your terminal — scan it next.",
-                        command: "remodex up"
+                        title: String(localized: "Start Pairing"),
+                        description: String(localized: "Scan the QR code displayed by the bridge installation on your computer.")
                     )
                     .tag(4)
                 }
@@ -111,13 +109,13 @@ struct OnboardingView: View {
         if currentPage == pageCount - 1 {
             VStack(spacing: 10) {
                 PrimaryCapsuleButton(
-                    title: "Scan with QR Code",
+                    title: String(localized: "Scan with QR Code"),
                     systemImage: "qrcode",
                     action: handleContinue
                 )
 
                 secondaryCapsuleButton(
-                    title: "Pair with Code",
+                    title: String(localized: "Pair with Code"),
                     systemImage: "keyboard",
                     action: onPairWithCode
                 )
@@ -157,9 +155,9 @@ struct OnboardingView: View {
 
     private var buttonTitle: String {
         switch currentPage {
-        case 0: return "Get Started"
-        case 1: return "Set Up"
-        default: return "Continue"
+        case 0: return String(localized: "Get Started")
+        case 1: return String(localized: "Set Up")
+        default: return String(localized: "Continue")
         }
     }
 

@@ -336,7 +336,7 @@ struct SidebarThreadListView: View {
                 projectlessRootPaths: projectlessRootPaths
             )
                 ? (taskViewMode == .activity
-                    ? thread.projectGroupPath.map { URL(fileURLWithPath: $0).lastPathComponent }
+                    ? thread.projectGroupPath.map { $0.pathDisplayName }
                     : thread.projectDisplayName)
                 : nil,
             childSubagentCount: childSubagentCount,
@@ -584,7 +584,7 @@ private enum SidebarThreadListPreviewFixtures {
     static let groups: [SidebarThreadGroup] = [
         SidebarThreadGroup(
             id: "pinned",
-            label: "Pinned",
+            label: String(localized: "Pinned"),
             kind: .pinned,
             sortDate: ago(8),
             projectPath: nil,

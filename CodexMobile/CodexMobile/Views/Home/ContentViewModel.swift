@@ -756,10 +756,11 @@ extension ContentViewModel {
         return currentDeviceId != targetDeviceId
     }
 
-    func switchToTrustedMac(deviceId: String, codex: CodexService) async throws {
+    func switchToTrustedMac(deviceId: String, codex: CodexService, interruptActiveTurns: Bool = true) async throws {
         let normalizedTargetMacDeviceId = try normalizedRequiredMacDeviceId(deviceId)
         logMacSwitchState("start", targetMacDeviceId: normalizedTargetMacDeviceId, codex: codex)
-        guard normalizedTargetMacDeviceId != codex.normalizedCurrentTrustedMacDeviceId else {
+        guard normalizedTargetMacDeviceId != codex.normalizedCurrentTrustedMacDeviceId
+            || (!interruptActiveTurns && !codex.isConnected) else {
             logMacSwitchState("ignored-already-current", targetMacDeviceId: normalizedTargetMacDeviceId, codex: codex)
             return
         }
@@ -807,7 +808,9 @@ extension ContentViewModel {
                 logMacSwitchState("retargeted-live-record", targetMacDeviceId: resolvedMacDeviceId, codex: codex)
             }
 
-            try await interruptRunningTurnsBeforeMacSwitchIfNeeded(codex: codex)
+            if interruptActiveTurns {
+                try await interruptRunningTurnsBeforeMacSwitchIfNeeded(codex: codex)
+            }
             await stopAutoReconnectForManualRetry(codex: codex)
 
             codex.saveLocalState(for: previousCurrentTrustedMacDeviceId)

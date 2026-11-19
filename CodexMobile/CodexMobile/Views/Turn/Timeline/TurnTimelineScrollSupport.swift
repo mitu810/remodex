@@ -11,6 +11,12 @@ import UIKit
 
 struct ScrollBottomState: Equatable {
     let isAtBottom: Bool
+    let isPullingPastTop: Bool
+
+    init(isAtBottom: Bool, isPullingPastTop: Bool = false) {
+        self.isAtBottom = isAtBottom
+        self.isPullingPastTop = isPullingPastTop
+    }
 
     static func from(_ geometry: ScrollGeometry) -> ScrollBottomState {
         let viewportHeight = geometry.visibleRect.height
@@ -23,7 +29,10 @@ struct ScrollBottomState: Equatable {
             isAtBottom = geometry.visibleRect.maxY
                 >= geometry.contentSize.height - TurnScrollStateTracker.bottomThreshold
         }
-        return ScrollBottomState(isAtBottom: isAtBottom)
+        return ScrollBottomState(
+            isAtBottom: isAtBottom,
+            isPullingPastTop: geometry.contentOffset.y + geometry.contentInsets.top <= -60
+        )
     }
 }
 

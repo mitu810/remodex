@@ -28,6 +28,7 @@ private final class TurnTimelineTransientProjectionMemo {
 
 struct TurnTimelineView<EmptyState: View, Composer: View>: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @AppStorage(ThreadHistoryPageSize.storageKey) private var historyPageSize = ThreadHistoryPageSize.defaultValue
 
     let threadID: String
     let messages: [CodexMessage]
@@ -71,10 +72,7 @@ struct TurnTimelineView<EmptyState: View, Composer: View>: View {
     @ViewBuilder let composer: () -> Composer
 
     private let scrollBottomAnchorID = "turn-scroll-bottom-anchor"
-    /// Number of messages to show per page.  Only the tail slice is rendered;
-    /// scrolling to the top reveals a "Load earlier messages" button.
-    private static var pageSize: Int { 40 }
-    private static var initialVisibleTailCount: Int { 80 }
+    private static var initialVisibleTailCount: Int { TurnTimelineProjectionPolicy.initialMessageLimit }
     /// Heavy-chat staged warmup is temporarily disabled until geometry settles reliably.
     private static var initialWarmTailCount: Int { 0 }
     private static var scrollToLatestButtonLift: CGFloat { 44 + 8 }
@@ -89,6 +87,8 @@ struct TurnTimelineView<EmptyState: View, Composer: View>: View {
     @State private var progressiveTailRevealTask: Task<Void, Never>?
     @State private var isProgressivelyRevealingRecentTail = false
     @State private var isUserTouchingScroll = false
+    @State private var isUserDraggingTimeline = false
+    @State private var didLoadEarlierDuringDrag = false
     @State private var pendingRemoteEarlierLoadMessageCount: Int?
     @State private var isLocalEarlierRevealPending = false
     @State private var isRetryingEarlierHistoryLoad = false
@@ -208,6 +208,10 @@ struct TurnTimelineView<EmptyState: View, Composer: View>: View {
             || isLoadingRemoteEarlierMessages
             || isLocalEarlierRevealPending
             || isRetryingEarlierHistoryLoad
+    }
+
+    private var canLoadEarlierMessages: Bool {
+        hasEarlierMessages && !isEarlierHistoryInteractionActive
     }
 
     private var shouldWarmRecentTailProgressively: Bool {
@@ -381,6 +385,7 @@ struct TurnTimelineView<EmptyState: View, Composer: View>: View {
                             .allowsHitTesting(false)
                     }
                     .accessibilityIdentifier("turn.timeline.scrollview")
+                    .scrollBounceBehavior(hasEarlierMessages ? .always : .automatic, axes: .vertical)
                     .background(Color(.systemBackground))
                     .overlay {
                         if shouldShowFullTimelineLoader {
@@ -646,7 +651,7 @@ struct TurnTimelineView<EmptyState: View, Composer: View>: View {
     }
 
     private func handleLoadEarlierMessages() {
-        guard !isEarlierHistoryInteractionActive else {
+        guard canLoadEarlierMessages else {
             return
         }
 
@@ -663,10 +668,11 @@ struct TurnTimelineView<EmptyState: View, Composer: View>: View {
         if hasLegacyLocalRowsToReveal || hasLocallyProjectedEarlierMessages {
             localEarlierRevealTask?.cancel()
             isLocalEarlierRevealPending = true
-            onRevealEarlierMessages(Self.pageSize)
+            let pageSize = historyPageSize.messageCount
+            onRevealEarlierMessages(pageSize)
             if !usesPaginatedHistory {
                 withAnimation(.easeOut(duration: 0.15)) {
-                    visibleTailCount = min(visibleTailCount + Self.pageSize, messages.count + Self.pageSize)
+                    visibleTailCount = min(visibleTailCount + pageSize, messages.count + pageSize)
                 }
             }
             scheduleLocalEarlierRevealCompletion()
@@ -763,6 +769,8 @@ struct TurnTimelineView<EmptyState: View, Composer: View>: View {
         progressiveTailRevealTask?.cancel()
         progressiveTailRevealTask = nil
         isProgressivelyRevealingRecentTail = false
+        isUserDraggingTimeline = false
+        didLoadEarlierDuringDrag = false
         pendingRemoteEarlierLoadMessageCount = nil
         isLocalEarlierRevealPending = false
         isRetryingEarlierHistoryLoad = false
@@ -1040,10 +1048,19 @@ struct TurnTimelineView<EmptyState: View, Composer: View>: View {
         new: ScrollBottomState,
         using proxy: ScrollViewProxy
     ) {
+        if new.isPullingPastTop,
+           !old.isPullingPastTop,
+           isUserDraggingTimeline,
+           !didLoadEarlierDuringDrag,
+           canLoadEarlierMessages {
+            didLoadEarlierDuringDrag = true
+            handleLoadEarlierMessages()
+        }
+
         // Physical observation stays current even while the first response is pending.
         // The gate below suppresses SwiftUI commits; geometry never transfers ownership.
         scrollGeometryCoalescer.observe(new)
-        guard shouldTrackScrollGeometry else { return }
+        guard old.isAtBottom != new.isAtBottom, shouldTrackScrollGeometry else { return }
 
         // Coalesce into a single commit per display-frame window so SwiftUI
         // does not receive several geometry-driven state mutations per frame.
@@ -1096,7 +1113,10 @@ struct TurnTimelineView<EmptyState: View, Composer: View>: View {
             latestObservedIsAtBottom: scrollGeometryCoalescer.latestObservedIsAtBottom
         )
         isScrolledToBottom = effectiveBottom
-        transitionScrollOwnership(.userInteractionEnded(isAtBottom: effectiveBottom))
+        if !didLoadEarlierDuringDrag {
+            transitionScrollOwnership(.userInteractionEnded(isAtBottom: effectiveBottom))
+        }
+        didLoadEarlierDuringDrag = false
         handleTimelineMutation(using: proxy)
     }
 
@@ -1107,8 +1127,10 @@ struct TurnTimelineView<EmptyState: View, Composer: View>: View {
         using proxy: ScrollViewProxy
     ) {
         updateStreamingInteractionMonitor(from: oldPhase, to: newPhase)
+        isUserDraggingTimeline = newPhase == .interacting
         switch newPhase {
         case .tracking:
+            didLoadEarlierDuringDrag = false
             handleUserScrollTrackingBegan()
         case .interacting:
             handleUserScrollInteractionBegan()

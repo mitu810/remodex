@@ -218,7 +218,7 @@ extension CodexService {
             return thread
         }
 
-        if thread.normalizedProjectPath == authoritativePath {
+        if RemoteHostPath.sameProject(thread.normalizedProjectPath, authoritativePath) {
             if treatAsServerState, let normalizedThreadId = normalizedThreadIdValue(thread.id) {
                 authoritativeProjectPathByThreadID.removeValue(forKey: normalizedThreadId)
             }
@@ -243,12 +243,12 @@ extension CodexService {
 
         let canonicalCurrentPath = canonicalRepoIdentifier(for: currentProjectPath) ?? currentProjectPath
         let canonicalObservedPath = canonicalRepoIdentifier(for: observedProjectPath) ?? observedProjectPath
-        guard canonicalCurrentPath == canonicalObservedPath,
+        guard RemoteHostPath.sameProject(canonicalCurrentPath, canonicalObservedPath),
               CodexThread.isManagedWorktreePath(canonicalObservedPath) else {
             return false
         }
 
-        if currentThread.normalizedProjectPath == canonicalObservedPath {
+        if RemoteHostPath.sameProject(currentThread.normalizedProjectPath, canonicalObservedPath) {
             confirmAuthoritativeProjectPathIfNeeded(threadId: normalizedThreadId, projectPath: canonicalObservedPath)
             return false
         }
@@ -271,7 +271,7 @@ private extension CodexService {
         guard let normalizedThreadId = normalizedInterruptIdentifier(threadId) ?? normalizedThreadIdValue(threadId),
               let authoritativeProjectPath = currentAuthoritativeProjectPath(for: normalizedThreadId),
               let normalizedProjectPath = normalizedStoredProjectPath(projectPath),
-              normalizedProjectPath == authoritativeProjectPath else {
+              RemoteHostPath.sameProject(normalizedProjectPath, authoritativeProjectPath) else {
             return
         }
 

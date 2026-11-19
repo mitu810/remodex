@@ -48,6 +48,10 @@ function composeAccountStatus({
       normalizeString(bridgePackageVersion),
     ]) || null,
     bridgeLatestVersion: normalizeString(bridgeVersionInfo?.bridgeLatestVersion) || null,
+    ...(bridgeVersionInfo?.bridgeReleaseRepository ? {
+      bridgeReleaseRepository: bridgeVersionInfo.bridgeReleaseRepository,
+      bridgeCanInstallRelease: bridgeVersionInfo.bridgeCanInstallRelease === true,
+    } : {}),
     codexTransportMode: normalizeString(transportMode) || null,
     hostPlatform: normalizeHostPlatform(hostPlatform),
     hostCapabilities: deriveHostCapabilities(hostPlatform),
@@ -81,6 +85,10 @@ function redactAuthStatus(authStatus = null, extras = {}) {
     expiresAt: composed.expiresAt,
     bridgeVersion: composed.bridgeVersion,
     bridgeLatestVersion: composed.bridgeLatestVersion,
+    ...(composed.bridgeReleaseRepository ? {
+      bridgeReleaseRepository: composed.bridgeReleaseRepository,
+      bridgeCanInstallRelease: composed.bridgeCanInstallRelease,
+    } : {}),
     codexTransportMode: composed.codexTransportMode,
     hostPlatform: composed.hostPlatform,
     hostCapabilities: composed.hostCapabilities,
@@ -178,5 +186,6 @@ function deriveHostCapabilities(platform) {
 module.exports = {
   composeAccountStatus,
   composeSanitizedAuthStatusFromSettledResults,
+  isChatGPTAuthMethod,
   redactAuthStatus,
 };

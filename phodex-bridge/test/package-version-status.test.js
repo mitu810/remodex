@@ -11,6 +11,27 @@ const { version: bridgePackageVersion } = require("../package.json");
 const {
   createBridgePackageVersionStatusReader,
 } = require("../src/package-version-status");
+const { parseBridgeRelease } = require("../src/bridge-release");
+
+test("only a stable fork release with a verified update asset advertises a bridge version", () => {
+  const digest = "a".repeat(64);
+  const asset = {
+    name: "remodex-bridge-update.zip",
+    state: "uploaded",
+    size: 1024,
+    digest: `sha256:${digest}`,
+    browser_download_url: "https://github.com/mitu810/remodex/releases/download/v4.1.0/remodex-bridge-update.zip",
+  };
+  const release = { tag_name: "v4.1.0", draft: false, prerelease: false, assets: [asset] };
+  assert.equal(parseBridgeRelease(release)?.version, "4.1.0");
+  assert.equal(parseBridgeRelease({ ...release, prerelease: true }), null);
+  assert.equal(parseBridgeRelease({ ...release, assets: [] }), null);
+  assert.equal(parseBridgeRelease({ ...release, assets: [{ ...asset, digest: null }] }), null);
+  assert.equal(parseBridgeRelease({
+    ...release,
+    assets: [{ ...asset, browser_download_url: asset.browser_download_url.replace("mitu810", "other") }],
+  }), null);
+});
 
 function createDeferred() {
   let resolve;

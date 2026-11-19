@@ -347,14 +347,14 @@ test("remodex uninstall-service --json reports the removed plist path", async ()
   assert.equal(payload.removed, false);
 });
 
-test("remodex uninstall-service is rejected on non-macOS platforms", async () => {
+test("remodex uninstall-service is rejected on unsupported platforms", async () => {
   const messages = [];
   let exitCode = null;
 
   await assert.rejects(
     main({
       argv: ["node", "remodex", "uninstall-service"],
-      platform: "linux",
+      platform: "freebsd",
       consoleImpl: {
         log(message) {
           throw new Error(`unexpected log: ${message}`);
@@ -378,9 +378,34 @@ test("remodex uninstall-service is rejected on non-macOS platforms", async () =>
 
   assert.equal(exitCode, 1);
   assert.deepEqual(messages, [
-    "[remodex] `uninstall-service` is only available on macOS. Use `remodex up` or `remodex run` for the foreground bridge on this OS.",
+    "[remodex] Service management is unavailable on freebsd. Use `remodex run` for the foreground bridge.",
   ]);
 });
+
+for (const platform of ['win32', 'linux']) {
+  test(`native ${platform} CLI routes service lifecycle and pairing through its platform service`, async () => {
+    const calls = [];
+    const pairingSession = { pairingPayload: { sessionId: 'private' } };
+    const nativeService = {
+      async start(options) { calls.push(['start', options]); return { pairingSession }; },
+      async restart() { calls.push(['restart']); return {}; },
+      async stop() { calls.push(['stop']); },
+      async uninstall() { calls.push(['uninstall']); return { removed: true }; },
+      async resetPairing() { calls.push(['reset']); },
+      printPairingQr(options) { calls.push(['qr', options]); },
+      printStatus() { calls.push(['status']); },
+    };
+    const deps = { nativeService, startBridge() { assert.fail('background CLI must not start a second foreground bridge'); } };
+    for (const command of ['up', 'start', 'restart', 'stop', 'status', 'qr', 'reset-pairing', 'uninstall-service']) {
+      await main({ argv: ['node', 'remodex', command], platform, deps, consoleImpl: { log() {}, error: assert.fail } });
+    }
+    assert.deepEqual(calls, [
+      ['start', { waitForPairing: true }], ['qr', { pairingSession }],
+      ['start', undefined], ['restart'], ['stop'], ['status'],
+      ['start', { waitForPairing: true }], ['qr', { pairingSession }], ['reset'], ['uninstall'],
+    ]);
+  });
+}
 
 test("runCli prints expected failures without a Node stack trace", async () => {
   const messages = [];

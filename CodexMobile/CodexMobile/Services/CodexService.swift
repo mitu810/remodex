@@ -139,6 +139,12 @@ final class CodexURLSessionWebSocketDelegate: NSObject, URLSessionWebSocketDeleg
     }
 }
 
+enum RemodexBridgeRelease {
+    static let repository = "mitu810/remodex"
+    static let url = URL(string: "https://github.com/\(repository)/releases/latest")!
+    static let updateCommand = "node update-remodex-bridge.cjs"
+}
+
 struct CodexBridgeUpdatePrompt: Identifiable, Equatable, Sendable {
     let id = UUID()
     let title: String
@@ -588,6 +594,7 @@ final class CodexService {
     @ObservationIgnored var provisionalPaginatedHistoryThreadIDs: Set<String> = []
     // Mirrors the bridge package version currently running on the Mac, if the bridge reports it.
     var bridgeInstalledVersion: String?
+    var bridgeCanInstallRelease = false
     // Mirrors the latest published bridge package version, when the bridge can resolve it.
     var latestBridgePackageVersion: String?
     // Fresh QR scans must use bootstrap once, even if this Mac was already trusted before.
@@ -782,10 +789,10 @@ final class CodexService {
         bridgeHostCapabilities.keepAwake
     }
     var supportsBridgePackageUpdate: Bool {
-        bridgeHostCapabilities.bridgeUpdate
+        bridgeCanInstallRelease && bridgeHostCapabilities.bridgeUpdate
     }
     var hostComputerLabel: String {
-        bridgeHostPlatform.displayName
+        gptAccountSnapshot.hostPlatform?.displayName ?? "computer"
     }
     // Remembers whether the current plan flow is staying native or has fallen back to inferred UI.
     var planSessionSourceByThread: [String: CodexPlanSessionSource] = [:] {
@@ -810,6 +817,10 @@ final class CodexService {
     var completionPushSessionID: String?
     var pushRegistrationGeneration = 0
     var shouldAutoReconnectOnForeground = false
+    var managedCredentialStatusByDeviceID: [String: String]
+    var managedCredentialRestartingDeviceIDs: Set<String> = []
+    var liveManagedCredentialDeviceID: String?
+    var managedCredentialDesktopRestartFailed = false
     // Test hook so connection handling can model `.inactive` without waiting for real app lifecycle changes.
     @ObservationIgnored var applicationStateProvider: () -> UIApplication.State = { UIApplication.shared.applicationState }
     var backgroundTurnGraceExpiredUntilForeground = false
@@ -917,6 +928,8 @@ final class CodexService {
         self.encoder = encoder
         self.decoder = decoder
         self.defaults = defaults
+        self.managedCredentialStatusByDeviceID =
+            defaults.dictionary(forKey: Self.managedCredentialStatusDefaultsKey) as? [String: String] ?? [:]
         self.userNotificationCenter = userNotificationCenter ?? UNUserNotificationCenter.current()
         self.remoteNotificationRegistrar = remoteNotificationRegistrar ?? CodexApplicationRemoteNotificationRegistrar()
         self.phoneIdentityState = codexPhoneIdentityStateFromSecureStore()

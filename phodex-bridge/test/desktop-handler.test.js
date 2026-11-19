@@ -6,10 +6,73 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const { EventEmitter } = require("node:events");
 const path = require("node:path");
 
-const { handleDesktopRequest } = require("../src/desktop-handler");
+const { handleDesktopRequest, restartRunningCodexDesktop } = require("../src/desktop-handler");
 const { createDesktopIpcLiveOwner } = require("../src/desktop-ipc-live-owner");
+
+test("credential restart targets the current macOS user's exact desktop bundle", async () => {
+  const appPath = "/test/ChatGPT.app";
+  const calls = [];
+  let running = true;
+  await restartRunningCodexDesktop({
+    platform: "darwin", codexHome: "/test/.codex", homeDir: "/test", appPath,
+    fsModule: { existsSync: () => true },
+    processImpl: { getuid: () => 501 },
+    executor: async (command, args) => {
+      if (command === "/usr/bin/plutil") return { stdout: "ChatGPT" };
+      calls.push([command, args]);
+      if (command === "pkill") running = false;
+      if (command === "pgrep" && !running) throw Object.assign(new Error("not running"), { code: 1 });
+    },
+  });
+  assert.deepEqual(calls.map(([command]) => command), ["pgrep", "pkill", "pgrep", "/usr/bin/open"]);
+  assert.deepEqual(calls[1][1].slice(0, 4), ["-u", "501", "-f", "-x"]);
+  assert.deepEqual(calls[3][1], ["-a", appPath]);
+});
+
+test("credential restart reopens Linux desktop in its original display session", async () => {
+  const executable = "/usr/lib/chatgpt/ChatGPT";
+  let stopped = false;
+  let relaunched = false;
+  await restartRunningCodexDesktop({
+    platform: "linux", codexHome: "/test/.codex", homeDir: "/test",
+    fsModule: {
+      existsSync: () => true,
+      readdirSync: () => ["1", "2", "3"],
+      statSync: (file) => ({ uid: file === "/proc/1" ? 0 : 501 }),
+      readlinkSync: () => {
+        if (stopped) throw Object.assign(new Error("gone"), { code: "ENOENT" });
+        return executable;
+      },
+      readFileSync: (file) => {
+        if (file === "/proc/2/cmdline") return executable + "\0--type=renderer\0";
+        if (file === "/proc/3/cmdline") return executable + "\0";
+        assert.equal(file, "/proc/3/environ");
+        return "HOME=/test\0DISPLAY=:1\0OPENAI_API_KEY=fixture-secret\0";
+      },
+    },
+    processImpl: {
+      getuid: () => 501,
+      kill(pid, signal) {
+        assert.deepEqual([pid, signal], [3, "SIGTERM"]);
+        stopped = true;
+      },
+    },
+    spawnImpl(launcher, args, options) {
+      assert.equal(stopped, true);
+      assert.equal(launcher, "/usr/bin/chatgpt");
+      assert.deepEqual(args, []);
+      assert.deepEqual(options.env, { HOME: "/test", DISPLAY: ":1" });
+      const child = new EventEmitter();
+      child.unref = () => { relaunched = true; };
+      queueMicrotask(() => child.emit("spawn"));
+      return child;
+    },
+  });
+  assert.equal(relaunched, true);
+});
 
 test("desktop handoff detects and relaunches the configured bundle's executable", async () => {
   const appPath = "/test/Custom ChatGPT.app";

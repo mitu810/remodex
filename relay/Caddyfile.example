@@ -1,0 +1,14 @@
+{
+	log {
+		format filter {
+			wrap json
+			request>uri delete
+		}
+	}
+}
+
+{$REMODEX_RELAY_DOMAIN} {
+	reverse_proxy 127.0.0.1:9000 {
+		header_up X-Real-IP {http.request.remote.host}
+	}
+}
