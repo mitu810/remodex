@@ -11,6 +11,7 @@ const {
   findRecentRolloutFileForContextRead,
   resolveSessionsRoot,
 } = require("./rollout-watch");
+const { readSessionJsonlMetadataFromFile } = require("./session-jsonl-history");
 const { resolveCodexGeneratedImagesRoot } = require("./codex-home");
 const { isConversationImageContentItem, sanitizeInlineHistoryImageContentItem } = require("./history-image");
 const { buildApplyPatchFileChangeItem } = require("./apply-patch-changes");
@@ -36,6 +37,7 @@ const {
 // together, so consecutive ticks never merge into one batch.
 const DEFAULT_POLL_INTERVAL_MS = 250;
 const DEFAULT_LOOKUP_TIMEOUT_MS = 5_000;
+const ROLLOUT_PATH_RECHECK_MS = 5_000;
 const DEFAULT_IDLE_TIMEOUT_MS = 60_000;
 const DEFAULT_ACTIVITY_HEARTBEAT_MS = 5_000;
 // Bootstrap replay must not resurrect runs whose rollout stopped growing long ago
@@ -182,6 +184,7 @@ function createThreadRolloutLiveMirror({
 
   let isStopped = false;
   let rolloutPath = null;
+  let nextRolloutPathCheckAt = startedAt + ROLLOUT_PATH_RECHECK_MS;
   let lastSize = 0;
   let partialLine = "";
   let lastActivityAt = startedAt;
@@ -235,13 +238,30 @@ function createThreadRolloutLiveMirror({
         rolloutPath = findRecentRolloutFileForContextRead(resolveSessionsRoot(), {
           threadId,
           fsModule,
+          now,
         });
         if (!rolloutPath) {
           return;
         }
       }
 
-      const rolloutStat = fsModule.statSync(rolloutPath);
+      let rolloutStat = fsModule.statSync(rolloutPath);
+      if (rolloutStat.size === lastSize && currentTime >= nextRolloutPathCheckAt) {
+        nextRolloutPathCheckAt = currentTime + ROLLOUT_PATH_RECHECK_MS;
+        const continuationPath = findRecentRolloutFileForContextRead(resolveSessionsRoot(), {
+          threadId, fsModule, now,
+        });
+        // A later rollout can be opened under the same thread ID. Historical
+        // files may be touched again, but must not take over the live cursor.
+        if (continuationPath && path.basename(continuationPath) > path.basename(rolloutPath)
+          && readSessionJsonlMetadataFromFile(continuationPath, { fsModule }).threadId === threadId) {
+          rolloutPath = continuationPath;
+          rolloutStat = fsModule.statSync(rolloutPath);
+          partialLine = "";
+          didBootstrap = false;
+          resetRunState(state);
+        }
+      }
       const fileSize = rolloutStat.size;
       // Re-check ownership with the rollout's activity time before bootstrapping.
       // If another source owns the thread, leave the file untouched until that

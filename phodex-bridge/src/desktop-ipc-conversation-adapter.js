@@ -19,6 +19,7 @@ const {
 } = require("./desktop-ipc-shared");
 
 const LOCAL_HOST_ID = "local";
+const TERMINAL_TURN_STATUSES = new Set(["completed", "interrupted", "failed", "cancelled", "canceled", "aborted"]);
 
 function resolveTurnForConversation({
   conversation,
@@ -90,6 +91,12 @@ function promoteFallbackTurnId(conversation, fallbackTurnIdsByThreadId, explicit
   const fallbackTurn = conversation.turns.find((candidate) => (
     readString(candidate?.turnId) || readString(candidate?.id)
   ) === fallbackTurnId);
+  if (conversation.turns.some((candidate) => (
+    readString(candidate?.turnId) || readString(candidate?.id)
+  ) === explicitTurnId)) {
+    // Late events for an already-known turn do not identify the next pending start.
+    return;
+  }
   if (fallbackTurn) {
     fallbackTurn.id = explicitTurnId;
     fallbackTurn.turnId = explicitTurnId;
@@ -261,6 +268,11 @@ function applyAppServerMessageToConversationState({
         return null;
       }
       const conversation = ensureConversationInMap(conversations, threadId, { hostId, now });
+      const turnId = readTurnIdFromTurn(turn);
+      const existingTurn = turnId ? conversation.turns.find((candidate) => readTurnIdFromTurn(candidate) === turnId) : null;
+      if (method === "turn/started" && TERMINAL_TURN_STATUSES.has(normalizeToken(existingTurn?.status))) {
+        return { threadId, changed: false };
+      }
       const upsertedTurn = upsertTurn(conversation, resolveTurnForConversation({
         conversation,
         turn,
@@ -268,7 +280,7 @@ function applyAppServerMessageToConversationState({
         fallbackTurnIdsByThreadId,
         now,
       }), { now });
-      if (method === "turn/started") {
+      if (method === "turn/started" && (!existingTurn || isOptimisticPendingTurn(existingTurn))) {
         applyPendingTurnStartParams(
           conversation,
           upsertedTurn,
@@ -848,14 +860,16 @@ function applyPendingTurnStartParams(
   conversation,
   turn,
   pendingTurnStartParamsByThreadId,
-  fallbackTurnIdsByThreadId = null
+  fallbackTurnIdsByThreadId = null,
+  acceptedEntry = null
 ) {
   if (!turn || !(pendingTurnStartParamsByThreadId instanceof Map)) {
     return;
   }
   const threadId = readString(conversation?.id);
   const queue = threadId ? pendingTurnStartParamsByThreadId.get(threadId) : null;
-  const pendingEntry = Array.isArray(queue) ? queue.shift() : null;
+  const index = acceptedEntry ? (queue?.indexOf(acceptedEntry) ?? -1) : 0;
+  const pendingEntry = Array.isArray(queue) && index >= 0 ? queue.splice(index, 1)[0] : null;
   if (Array.isArray(queue) && queue.length === 0) {
     pendingTurnStartParamsByThreadId.delete(threadId);
   }
@@ -868,7 +882,9 @@ function applyPendingTurnStartParams(
     return;
   }
 
-  applyTurnRuntimeMetadata(conversation, pendingParams);
+  if (!acceptedEntry) {
+    applyTurnRuntimeMetadata(conversation, pendingParams);
+  }
 
   const input = Array.isArray(pendingParams.input) ? pendingParams.input : [];
   if (input.length === 0) {
@@ -883,6 +899,42 @@ function applyPendingTurnStartParams(
     cwd: readString(turn.params?.cwd) || readString(conversation?.cwd),
   });
   normalizeTurnInitialPrompt(turn);
+}
+
+function reconcileAcceptedTurnStart({
+  conversation,
+  entry,
+  turnId,
+  acceptedTurn,
+  pendingTurnStartParamsByThreadId,
+  fallbackTurnIdsByThreadId,
+  now,
+}) {
+  if (!conversation || !entry || entry.consumed || !turnId) {
+    return;
+  }
+
+  let turn = conversation.turns.find((candidate) => readTurnIdFromTurn(candidate) === turnId);
+  const optimisticIndex = conversation.turns.findIndex((candidate) => (
+    isOptimisticPendingTurn(candidate) && readTurnIdFromTurn(candidate) === entry.optimisticTurnId
+  ));
+  if (turn) {
+    // History and live events can advance the canonical turn before the start RPC returns.
+    if (optimisticIndex >= 0 && conversation.turns[optimisticIndex] !== turn) {
+      conversation.turns.splice(optimisticIndex, 1);
+    }
+    delete turn.remodexOptimisticPendingTurn;
+  } else {
+    if (optimisticIndex >= 0) {
+      const optimisticTurn = conversation.turns[optimisticIndex];
+      optimisticTurn.id = turnId;
+      optimisticTurn.turnId = turnId;
+    }
+    turn = upsertTurn(conversation, { ...acceptedTurn, id: turnId }, { now });
+  }
+  applyPendingTurnStartParams(
+    conversation, turn, pendingTurnStartParamsByThreadId, fallbackTurnIdsByThreadId, entry
+  );
 }
 
 function releaseConsumedOptimisticFallback(threadId, pendingEntry, fallbackTurnIdsByThreadId) {
@@ -1468,6 +1520,7 @@ module.exports = {
   readThreadIdFromParams,
   readTurnIdFromParams,
   readTurnIdFromTurn,
+  reconcileAcceptedTurnStart,
   synchronizeDesktopConversationCompatibility,
   timestampSecondsToMs,
   upsertItem,

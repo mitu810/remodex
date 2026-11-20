@@ -2209,6 +2209,8 @@ test("desktop IPC follower routes phone turns to Desktop-owned threads", async (
               ? { result: { turnId: "turn-from-phone" } }
               : frame.method === "thread-follower-update-thread-settings"
                 ? { applied: true }
+                : frame.method === "thread-follower-interrupt-turn" && frame.params.expectedTurnId === "stale-turn"
+                  ? { ok: true, interruptedTurnId: null }
                 : { turn: { id: "turn-from-phone" } },
         });
       }
@@ -2415,6 +2417,16 @@ test("desktop IPC follower routes phone turns to Desktop-owned threads", async (
       result: request.method === "turn/steer" ? { turnId: "turn-from-phone" } : { turn: { id: "turn-from-phone" } },
     });
   }
+
+  assert.equal(follower.observeInbound(JSON.stringify({
+    id: "phone-interrupt-stale", method: "turn/interrupt",
+    params: { threadId: "thread-desktop-owned", turnId: "stale-turn" },
+  })), true);
+  await waitFor(() => outbound.some((message) => message.id === "phone-interrupt-stale"));
+  assert.deepEqual(outbound.find((message) => message.id === "phone-interrupt-stale"), {
+    id: "phone-interrupt-stale",
+    error: { code: -32000, message: "The requested turn is not active." },
+  });
 
   follower.observeInbound(JSON.stringify({
     id: "phone-settings-update-1", method: "thread/settings/update",

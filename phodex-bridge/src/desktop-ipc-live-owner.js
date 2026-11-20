@@ -35,6 +35,7 @@ const {
   buildConversationStateFromThread,
   createEmptyConversationState,
   readThreadIdFromParams,
+  reconcileAcceptedTurnStart,
   synchronizeDesktopConversationCompatibility,
 } = require("./desktop-ipc-conversation-adapter");
 const {
@@ -659,14 +660,30 @@ function createDesktopIpcLiveOwner({
       }
       return;
     }
+    const turnId = reconcilePendingTurnStart(pending.threadId, pending.entry, message.result);
     commitAcceptedRuntimeSettings(
       pending.threadId,
       pending.entry?.params,
       "phone",
-      readTurnIdFromResult(message.result),
+      turnId,
       pending.entry?.runtimeSettingsRevision
     );
     scheduleSnapshot(pending.threadId);
+  }
+
+  function reconcilePendingTurnStart(threadId, entry, result) {
+    const turnId = readTurnIdFromResult(result);
+    reconcileAcceptedTurnStart({
+      conversation: conversations.get(threadId),
+      entry,
+      turnId,
+      acceptedTurn: result?.turn ?? result?.result?.turn,
+      pendingTurnStartParamsByThreadId,
+      fallbackTurnIdsByThreadId,
+      now,
+    });
+    refreshOptimisticFallbackForThread(threadId);
+    return turnId;
   }
 
   // Publishes phone-origin turns as soon as the bridge sees turn/start, instead
@@ -1562,11 +1579,12 @@ function createDesktopIpcLiveOwner({
     }
     try {
       const turnStartResult = await sendCodexRequest("turn/start", nextCodexParams);
+      const turnId = reconcilePendingTurnStart(conversationId, pendingEntry, turnStartResult);
       commitAcceptedRuntimeSettings(
         conversationId,
         nextCodexParams,
         isKnownHeldPhoneStart ? "phone" : "desktop",
-        readTurnIdFromResult(turnStartResult),
+        turnId,
         revisionBefore
       );
       scheduleSnapshot(conversationId);
@@ -1917,8 +1935,8 @@ function createDesktopIpcLiveOwner({
   }
 
   // True while the bridge's app-server is executing a turn for this thread, or
-  // has just been asked to start one (pending starts clear on error or on the
-  // matching turn/started snapshot). Queued follow-ups count as active work
+  // has just been asked to start one (pending starts clear on error, a canonical
+  // response, or a matching turn/started event). Queued follow-ups count as active work
   // too: releasing ownership deletes the queue, so yielding an "idle" thread
   // that still holds drafts would silently discard them. Such threads must not
   // be handed to peers or released on unsubscribe.

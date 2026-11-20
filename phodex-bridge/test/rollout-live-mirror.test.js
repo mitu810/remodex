@@ -945,6 +945,42 @@ test("desktop-origin mirror dedupes the same assistant text across event and res
   );
 });
 
+test("an attached desktop mirror follows a newer continuation of the same thread", async (t) => {
+  const threadId = "thread-relocated-rollout";
+  const { homeDir, rolloutPath } = createTemporaryRolloutHome({
+    threadId, originator: "Codex Desktop", source: "desktop",
+    lines: [taskStarted("old-turn"), userMessage("Old request")],
+  });
+  const previousCodexHome = process.env.CODEX_HOME;
+  process.env.CODEX_HOME = homeDir;
+  const outbound = [];
+  let clock = Date.now();
+  const controller = createRolloutLiveMirrorController({
+    sendApplicationResponse: (raw) => outbound.push(JSON.parse(raw)),
+    pollIntervalMs: 5, now: () => clock,
+  });
+  t.after(() => {
+    controller.stopAll();
+    restoreCodexHome(previousCodexHome);
+    fs.rmSync(homeDir, { recursive: true, force: true });
+  });
+
+  controller.observeInbound(JSON.stringify({ method: "thread/resume", params: { threadId } }));
+  await wait(30);
+  assert.equal(controller.getActiveTurnId(threadId), "old-turn");
+  const continuationPath = path.join(path.dirname(rolloutPath), `rollout-2026-03-15T19-47-37-${threadId}_continuation.jsonl`);
+  const header = fs.readFileSync(rolloutPath, "utf8").split("\n")[0];
+  fs.writeFileSync(continuationPath, [header, taskStarted("new-turn"), userMessage("New request"), agentMessage("New reply"), ""].join("\n"));
+  clock += 5_001;
+  await wait(80);
+  assert.equal(controller.getActiveTurnId(threadId), "new-turn");
+  assert.ok(outbound.some(({ params }) => params?.turnId === "new-turn" && JSON.stringify(params).includes("New reply")));
+  appendRolloutLines(continuationPath, [taskComplete("new-turn")]);
+  await wait(30);
+  assert.equal(controller.getActiveTurnId(threadId), null);
+  assert.ok(outbound.some(({ method, params }) => method === "turn/completed" && params?.turnId === "new-turn"));
+});
+
 test("desktop-origin mirror keeps repeated identical user steers while deduping their response copies", async (t) => {
   const { homeDir, rolloutPath } = createTemporaryRolloutHome({
     threadId: "thread-repeated-user-steers",

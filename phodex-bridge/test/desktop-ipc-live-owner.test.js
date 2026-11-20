@@ -1250,6 +1250,23 @@ test("live owner promotes rapid pending turns in FIFO order", async (t) => {
   assert.equal(turns[0].params.input[0].text, "first");
   assert.match(turns[1].turnId, /^remodex-pending-turn:/);
   assert.equal(turns[1].params.input[0].text, "second");
+  const secondPendingId = turns[1].turnId;
+
+  // A late item for the first turn must not rename the second placeholder to
+  // the first turn's canonical ID and leave Desktop with two copies of it.
+  owner.observeOutbound(JSON.stringify({
+    method: "item/completed",
+    params: { threadId: "thread-pending-fifo", turnId: "turn-fifo-1", item: { id: "first-final", type: "agentMessage", text: "done" } },
+  }));
+  assert.deepEqual(owner._debugSnapshot("thread-pending-fifo").turns.map((turn) => turn.turnId), ["turn-fifo-1", secondPendingId]);
+  for (const [method, status] of [["turn/completed", "completed"], ["turn/started", "inProgress"]]) {
+    owner.observeOutbound(JSON.stringify({
+      method, params: { threadId: "thread-pending-fifo", turn: { id: "turn-fifo-1", status } },
+    }));
+  }
+  const afterLateStart = owner._debugSnapshot("thread-pending-fifo").turns;
+  assert.equal(afterLateStart[0].status, "completed");
+  assert.equal(afterLateStart[1].turnId, secondPendingId);
 
   owner.observeOutbound(JSON.stringify({
     method: "turn/started",
@@ -1263,6 +1280,22 @@ test("live owner promotes rapid pending turns in FIFO order", async (t) => {
   turns = owner._debugSnapshot("thread-pending-fifo").turns;
   assert.deepEqual(turns.map((turn) => turn.turnId), ["turn-fifo-1", "turn-fifo-2"]);
   assert.deepEqual(turns.map((turn) => turn.params.input[0].text), ["first", "second"]);
+
+  owner.observeInbound(JSON.stringify({
+    id: "ack-without-start", method: "turn/start",
+    params: { threadId: "thread-pending-fifo", input: [{ type: "text", text: "third" }] },
+  }));
+  owner.observeInbound(JSON.stringify({ id: "read-completed", method: "thread/read", params: { threadId: "thread-pending-fifo" } }));
+  owner.observeOutbound(JSON.stringify({
+    id: "read-completed", result: { thread: { id: "thread-pending-fifo", turns: [{ id: "turn-fifo-3", status: "completed", startedAt: 3 }] } },
+  }));
+  owner.observeOutbound(JSON.stringify({
+    id: "ack-without-start", result: { turn: { id: "turn-fifo-3", status: "inProgress", startedAt: 3 } },
+  }));
+  const afterAck = owner._debugSnapshot("thread-pending-fifo").turns;
+  assert.deepEqual(afterAck.map((turn) => turn.turnId), ["turn-fifo-1", "turn-fifo-2", "turn-fifo-3"]);
+  assert.equal(afterAck.at(-1).status, "completed");
+  assert.equal(afterAck.at(-1).params.input[0].text, "third");
 });
 
 test("live owner promotes rapid turn-less pending starts in FIFO order", async (t) => {
@@ -2362,17 +2395,9 @@ test("live owner handles current start-turn and interrupt follower contracts", a
   assert.equal(appNotifications[0].params.remodexDesktopMirror, true);
   assert.equal(appNotifications[0].params.remodexDesktopIpcMirror, true);
 
-  owner.observeOutbound(JSON.stringify({
-    method: "turn/started",
-    params: {
-      threadId: "thread-owned",
-      turn: {
-        id: "turn-from-follower",
-        items: [],
-        status: "inProgress",
-      },
-    },
-  }));
+  // Desktop can stop the canonical turn immediately after the start reply,
+  // even when the turn/started notification was missed.
+  assert.deepEqual(owner._debugSnapshot("thread-owned").turns.map((turn) => turn.turnId), ["turn-from-follower"]);
 
   writeFrame(serverSocket, {
     type: "request",
@@ -2604,7 +2629,7 @@ test("live owner dedupes held phone turn starts routed back through follower IPC
     snapshotDebounceMs: 1,
     async sendCodexRequest(method) {
       if (method === "turn/start") {
-        return { turn: { id: "turn-from-held-follower" } };
+        return { turn: { id: "turn-one" } };
       }
       return { ok: true };
     },

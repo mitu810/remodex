@@ -2494,6 +2494,14 @@ function createDesktopIpcActionFollower({
         const currentSettings = runtimeSettingsStore?.get?.(route.threadId);
         const receivedOwnerSettings = currentSettings && currentSettings.revision !== revisionBefore;
         let appServerResult = appServerResultForFollowerRequest(route.method, result);
+        if (route.method === "thread-follower-interrupt-turn" && appServerResult?.interruptedTurnId === null) {
+          // An acknowledged no-op must trigger the phone's stale-turn recovery.
+          sendApplicationResponse(JSON.stringify({
+            id: originalMessage.id,
+            error: { code: -32000, message: "The requested turn is not active." },
+          }));
+          return;
+        }
         if (route.method === "thread-follower-update-thread-settings") {
           const settings = receivedOwnerSettings ? currentSettings
             : runtimeSettingsStore?.commit?.(route.threadId, route.params.threadSettings, { source: "phone" });
