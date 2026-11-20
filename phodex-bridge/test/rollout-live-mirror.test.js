@@ -1784,6 +1784,7 @@ test("desktop-origin active runs mirror generated image previews", async (t) => 
   assert.equal(outbound[2].params.call_id, "ig_123");
   assert.equal(outbound[2].params.itemId, "ig_123");
   assert.equal(outbound[2].params.turnId, "turn-image");
+  assert.equal(outbound[2].params.imageView, undefined);
   assert.equal(
     outbound[2].params.saved_path,
     path.join(homeDir, "generated_images", "thread-image", "ig_123.png")
@@ -1837,6 +1838,7 @@ test("desktop-origin active runs mirror imageView items", async (t) => {
   );
   assert.equal(outbound[2].params.call_id, "view_123");
   assert.equal(outbound[2].params.saved_path, "/tmp/generated view.png");
+  assert.equal(outbound[2].params.imageView, true);
 });
 
 test("desktop-origin active runs mirror image_generation items", async (t) => {

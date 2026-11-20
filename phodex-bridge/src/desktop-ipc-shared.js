@@ -14,13 +14,10 @@ const MAX_FRAME_BYTES = 256 * 1024 * 1024;
 
 const CLIENT_STATUS_CHANGED = "client-status-changed";
 
-// Single source of truth for Codex Desktop's IPC method versions. Desktop's
-// bundled map validates versions on both requests and broadcasts, and this
-// table already drifted once while it lived in two modules.
+// Legacy defaults for hosts without an inspectable Desktop installation.
 const DESKTOP_IPC_METHOD_VERSIONS = new Map([
   ["initialize", 1],
   [CLIENT_STATUS_CHANGED, 1],
-  // Desktop pins thread-stream-state-changed at version 11 and drops mismatches.
   ["thread-stream-state-changed", 11],
   ["thread-stream-following-changed", 1],
   ["thread-stream-following-status-requested", 1],
@@ -45,6 +42,52 @@ const DESKTOP_IPC_METHOD_VERSIONS = new Map([
   ["thread-follower-submit-mcp-server-elicitation-response", 1],
   ["thread-follower-set-queued-follow-ups-state", 1],
 ]);
+
+// Desktop validates the version on every message. Read its packaged method
+// table without running bundled code, and retain defaults for unknown methods.
+function resolveDesktopIpcMethodVersions(appPath) {
+  if (!appPath) return DESKTOP_IPC_METHOD_VERSIONS;
+  try {
+    const archive = path.join(appPath, "Contents", "Resources", "app.asar");
+    const bootstrap = readDesktopIpcBootstrap(archive);
+    const table = bootstrap.match(/\{(?:"[\w-]+":\d+,)*"thread-stream-state-changed":\d+(?:,"[\w-]+":\d+)*\}/);
+    if (!table) return DESKTOP_IPC_METHOD_VERSIONS;
+    const advertised = JSON.parse(table[0]);
+    if (!Number.isSafeInteger(advertised["thread-stream-following-changed"])
+        || !Number.isSafeInteger(advertised["thread-follower-start-turn"])) {
+      return DESKTOP_IPC_METHOD_VERSIONS;
+    }
+    return new Map(Array.from(DESKTOP_IPC_METHOD_VERSIONS, ([method, fallback]) => {
+      const version = advertised[method];
+      return [method, Number.isSafeInteger(version) && version > 0 ? version : fallback];
+    }));
+  } catch {
+    return DESKTOP_IPC_METHOD_VERSIONS;
+  }
+}
+
+function readDesktopIpcBootstrap(archive) {
+  const file = fs.openSync(archive, "r");
+  try {
+    const prefix = Buffer.alloc(16);
+    if (fs.readSync(file, prefix, 0, prefix.length, 0) !== prefix.length) return "";
+    // ASAR starts with a size pickle followed by the JSON file-index pickle.
+    const headerSize = prefix.readUInt32LE(4);
+    const jsonSize = prefix.readUInt32LE(12);
+    if (jsonSize > 16 * 1024 * 1024 || headerSize < jsonSize + 8 || headerSize > jsonSize + 11) return "";
+    const header = Buffer.alloc(jsonSize);
+    if (fs.readSync(file, header, 0, jsonSize, 16) !== jsonSize) return "";
+    const entry = JSON.parse(header).files?.[".vite"]?.files?.build?.files?.["early-bootstrap.js"];
+    if (!entry || entry.unpacked || !Number.isSafeInteger(entry.size) || entry.size <= 0
+        || entry.size > 8 * 1024 * 1024 || !/^\d+$/.test(entry.offset)) return "";
+    const start = 8 + headerSize + Number(entry.offset);
+    if (!Number.isSafeInteger(start) || start + entry.size > fs.fstatSync(file).size) return "";
+    const bootstrap = Buffer.alloc(entry.size);
+    return fs.readSync(file, bootstrap, 0, entry.size, start) === entry.size ? bootstrap.toString("utf8") : "";
+  } finally {
+    fs.closeSync(file);
+  }
+}
 
 // Mirrors Codex's ContextualUserFragment registry. Keep this exact: arbitrary
 // XML is valid user input, while these runtime-owned markers are hidden history.
@@ -596,12 +639,12 @@ function createFrameReader({ onFrame, onOverflow }) {
 
 // Desktop validates the method version and refuses requests from an unknown
 // sender, so both clients must build this envelope the same way.
-function buildIpcRequestEnvelope({ requestId, method, params, clientId, initializing = false }) {
+function buildIpcRequestEnvelope({ requestId, method, params, clientId, initializing = false, methodVersions = DESKTOP_IPC_METHOD_VERSIONS }) {
   return {
     type: "request",
     requestId,
     sourceClientId: initializing ? "initializing-client" : clientId || "remodex-bridge",
-    version: DESKTOP_IPC_METHOD_VERSIONS.get(method) || 1,
+    version: methodVersions.get(method) || 1,
     method,
     params: params || {},
   };
@@ -756,6 +799,7 @@ module.exports = {
   responseItemMessageText,
   requestIdKey,
   resolveDefaultIpcSocketPath,
+  resolveDesktopIpcMethodVersions,
   resolveIpcSocketPathCandidates,
   safeParseJSON,
   sanitizeUserInputEntries,

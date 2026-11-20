@@ -17,12 +17,51 @@ const {
   isContextualUserText,
   isThreadTurnStateProbeRequest,
   resolveDefaultIpcSocketPath,
+  resolveDesktopIpcMethodVersions,
   resolveIpcSocketPathCandidates,
   responseItemMessageText,
   sanitizeUserInputEntries,
   sanitizeUserRoleItem,
   visibleUserPromptText,
 } = require("../src/desktop-ipc-shared");
+
+test("Desktop IPC selects versions from the installed application archive", (t) => {
+  const app = fs.mkdtempSync(path.join(os.tmpdir(), "remodex-ipc-versions-"));
+  t.after(() => fs.rmSync(app, { recursive: true, force: true }));
+  const resources = path.join(app, "Contents", "Resources");
+  const archive = path.join(resources, "app.asar");
+  fs.mkdirSync(resources, { recursive: true });
+
+  const stream = "thread-stream-state-changed";
+  const queued = "thread-queued-followups-changed";
+  assert.equal(resolveDesktopIpcMethodVersions(app).get(stream), 11);
+
+  const source = Buffer.from(`let versions=${JSON.stringify({
+    [stream]: 13,
+    "thread-stream-following-changed": 1,
+    "thread-follower-start-turn": 2,
+    [queued]: 3,
+  })};`);
+  const header = Buffer.from(JSON.stringify({ files: {
+    ".vite": { files: { build: { files: {
+      "early-bootstrap.js": { size: source.length, offset: "0" },
+    } } } },
+  } }));
+  const alignedHeaderLength = Math.ceil(header.length / 4) * 4;
+  const prefix = Buffer.alloc(16);
+  prefix.writeUInt32LE(4, 0);
+  prefix.writeUInt32LE(alignedHeaderLength + 8, 4);
+  prefix.writeUInt32LE(alignedHeaderLength + 4, 8);
+  prefix.writeUInt32LE(header.length, 12);
+  fs.writeFileSync(archive, Buffer.concat([prefix, header, Buffer.alloc(alignedHeaderLength - header.length), source]));
+
+  const resolved = resolveDesktopIpcMethodVersions(app);
+  assert.equal(resolved.get(stream), 13);
+  assert.equal(resolved.get(queued), 3);
+  assert.equal(resolved.get("thread-read-state-changed"), 3);
+  fs.writeFileSync(archive, prefix);
+  assert.equal(resolveDesktopIpcMethodVersions(app).get(stream), 11);
+});
 
 test("Desktop IPC processes fragmented frames with linear buffer copying", (t) => {
   const frames = [];

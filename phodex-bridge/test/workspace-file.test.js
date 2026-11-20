@@ -18,6 +18,44 @@ function makeGitWorkspace() {
   return tempDir;
 }
 
+test("workspace/readVisualization reads only the current chat's HTML output", async (t) => {
+  const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), "remodex-visualization-"));
+  const previousCodexHome = process.env.CODEX_HOME;
+  process.env.CODEX_HOME = codexHome;
+  t.after(() => {
+    if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = previousCodexHome;
+    fs.rmSync(codexHome, { recursive: true, force: true });
+  });
+  const root = path.join(codexHome, "visualizations", "2026", "11", "19");
+  const current = path.join(root, "current-chat");
+  const other = path.join(root, "other-chat");
+  fs.mkdirSync(current, { recursive: true });
+  fs.mkdirSync(other, { recursive: true });
+  const content = '<div lang="zh">可视化示例</div>';
+  const file = path.join(current, "方案.html");
+  const outside = path.join(other, "方案.html");
+  fs.writeFileSync(file, content);
+  fs.writeFileSync(outside, "Other chat");
+  fs.symlinkSync(outside, path.join(current, "outside.html"));
+
+  for (const requestedPath of [file, "方案.html"]) {
+    assert.deepEqual(await handleWorkspaceMethod("workspace/readVisualization", {
+      threadId: "current-chat", path: requestedPath,
+    }), { fileName: "方案.html", content });
+  }
+  for (const requestedPath of [outside, "outside.html"]) {
+    await assert.rejects(() => handleWorkspaceMethod("workspace/readVisualization", {
+      threadId: "current-chat", path: requestedPath,
+    }), { errorCode: "visualization_path_not_allowed" });
+  }
+  const large = path.join(current, "large.html");
+  fs.writeFileSync(large, Buffer.alloc(1024 * 1024 + 1));
+  await assert.rejects(() => handleWorkspaceMethod("workspace/readVisualization", {
+    threadId: "current-chat", path: large,
+  }), { errorCode: "visualization_too_large" });
+});
+
 test("workspace/readFile returns UTF-8 text for a file inside cwd", async () => {
   const tempDir = makeGitWorkspace();
   const filePath = path.join(tempDir, "src", "App.swift");

@@ -68,6 +68,7 @@ const {
   isThreadTurnStateProbeRequest,
   isUserRoleItem,
   readUserItemText,
+  resolveDesktopIpcMethodVersions,
   sanitizeUserRoleItem,
   visibleUserPromptText,
 } = require("./desktop-ipc-shared");
@@ -963,6 +964,7 @@ function startBridgeSession({
       ),
     })
     : null;
+  const desktopIpcMethodVersions = !config.codexEndpoint ? resolveDesktopIpcMethodVersions(config.codexAppPath) : undefined;
   const desktopIpcActionFollower = !config.codexEndpoint
     ? createDesktopIpcActionFollower({
       sendApplicationResponse,
@@ -1002,6 +1004,7 @@ function startBridgeSession({
       isLocallyOwnedThread: (threadId) => Boolean(desktopIpcLiveOwner?.isThreadOwned(threadId)),
       normalizeTurnStartParams: normalizeTurnStartParamsForCodex,
       runtimeSettingsStore: threadRuntimeSettingsStore,
+      methodVersions: desktopIpcMethodVersions,
       socketPath: config.desktopIpcSocketPath || undefined,
       snapshotDebounceMs: config.desktopIpcSnapshotDebounceMs,
       onFollowerStateChanged(threadId, following) {
@@ -1018,6 +1021,7 @@ function startBridgeSession({
       sendRawCodexMessage: (rawMessage) => codex.send(rawMessage),
       normalizeTurnStartParams: normalizeTurnStartParamsForCodex,
       runtimeSettingsStore: threadRuntimeSettingsStore,
+      methodVersions: desktopIpcMethodVersions,
       socketPath: config.desktopIpcSocketPath || undefined,
       snapshotDebounceMs: config.desktopIpcSnapshotDebounceMs,
       onFollowerStateChanged(threadId, following) {

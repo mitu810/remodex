@@ -1762,6 +1762,7 @@ function imageGenerationNotifications(state, payload, { preferCallId = false } =
       saved_path: imagePath,
       file_path: imagePath,
       path: imagePath,
+      ...(normalizeRolloutItemType(payload.type) === "imageview" ? { imageView: true } : {}),
     }),
   ];
 }

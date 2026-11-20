@@ -5368,7 +5368,7 @@ test("desktop IPC follower recovers an active-writer race only after Desktop's c
     },
     async resumeThreadLocally() {
       localResumeAttempts += 1;
-      const error = new Error("Task already has an active writer");
+      const error = new Error("Task already has a live local writer");
       error.code = -32600;
       throw error;
     },

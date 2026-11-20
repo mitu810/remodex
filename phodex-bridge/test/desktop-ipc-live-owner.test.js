@@ -113,7 +113,7 @@ test("conversation adapter mirrors phone auto-approval review lifecycle into Des
   assert.equal(items[0].remodexGuardianRetrySupported, false);
 });
 
-test("live owner broadcasts Remodex-owned thread snapshots over Desktop IPC", async (t) => {
+test("live owner broadcasts Remodex-owned snapshots using the current Desktop stream version", async (t) => {
   const { tempDir, socketPath } = createIpcTestSocket("remodex-live-owner-");
   const frames = [];
   let serverSocket = null;
@@ -144,6 +144,7 @@ test("live owner broadcasts Remodex-owned thread snapshots over Desktop IPC", as
 
   const owner = createDesktopIpcLiveOwner({
     socketPath,
+    methodVersions: new Map([["thread-stream-state-changed", 13]]),
     snapshotDebounceMs: 1,
     sendCodexRequest: async () => ({ ok: true }),
     sendRawCodexMessage() {},
@@ -206,8 +207,8 @@ test("live owner broadcasts Remodex-owned thread snapshots over Desktop IPC", as
     frames,
     (frame) => frame.type === "broadcast" && frame.method === "thread-stream-state-changed"
   );
-  assert.equal(broadcast.version, 11);
-  assert.equal(broadcast.params.version, 11);
+  assert.equal(broadcast.version, 13);
+  assert.equal(broadcast.params.version, 13);
   assert.equal(broadcast.params.conversationId, "thread-live-owner");
     assert.equal(broadcast.params.remodexOwnerSource, "desktop-ipc-live-owner");
   assert.equal(broadcast.params.change.type, "snapshot");

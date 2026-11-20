@@ -254,6 +254,7 @@ function createDesktopIpcActionFollower({
   // Resolved per connect: Codex Desktop can start, stop, or move its bus while
   // the bridge stays up.
   socketPath = resolveIpcSocketPathCandidates,
+  methodVersions = METHOD_VERSION_BY_NAME,
   netModule = net,
   now = () => Date.now(),
   snapshotDebounceMs = 0,
@@ -269,6 +270,7 @@ function createDesktopIpcActionFollower({
   const enqueueMutation = createThreadMutationQueue();
   const ipc = createDesktopIpcClient({
     socketPath,
+    methodVersions,
     netModule,
     now,
     requestTimeoutMs,
@@ -1225,7 +1227,7 @@ function createDesktopIpcActionFollower({
       method: route.method,
       // Codex Desktop rejects discovery unless the nested request version matches
       // the method version, so mirror the normal request envelope here.
-      version: METHOD_VERSION_BY_NAME.get(route.method) || 1,
+      version: methodVersions.get(route.method) || 1,
       params: route.params,
     }, ownershipProbeTimeoutMs)
       .then((canHandle) => {
@@ -1308,7 +1310,7 @@ function createDesktopIpcActionFollower({
 
   function isActiveWriterError(error) {
     return Number(error?.code) === -32600
-      && /active writer|already has a writer/i.test(readString(error?.message));
+      && /active writer|live local writer|already has a writer/i.test(readString(error?.message));
   }
 
   // Owner discovery can use Desktop's stale ownership cache. A successful
@@ -2838,6 +2840,7 @@ function createDesktopIpcActionFollower({
 // Minimal IPC client for Litter's length-prefixed Codex desktop bus.
 function createDesktopIpcClient({
   socketPath,
+  methodVersions,
   netModule,
   now,
   requestTimeoutMs,
@@ -2928,6 +2931,7 @@ function createDesktopIpcClient({
       params,
       clientId,
       initializing: method === "initialize",
+      methodVersions,
     });
     if (targetClientId) envelope.targetClientId = targetClientId;
 
@@ -3004,7 +3008,7 @@ function createDesktopIpcClient({
       method,
       sourceClientId: clientId,
       params: params || {},
-      version: METHOD_VERSION_BY_NAME.get(method) || 1,
+      version: methodVersions.get(method) || 1,
     };
     if (Array.isArray(targetClientIds) && targetClientIds.length > 0) {
       envelope.targetClientIds = targetClientIds;

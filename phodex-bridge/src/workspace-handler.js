@@ -9,7 +9,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const { promisify, TextDecoder } = require("util");
-const { resolveCodexGeneratedImagesRoot } = require("./codex-home");
+const { resolveCodexGeneratedImagesRoot, resolveCodexHome } = require("./codex-home");
 const { isHistoryImageReference, readHistoryImage } = require("./history-image");
 const { gitStatus } = require("./git-handler");
 const {
@@ -25,6 +25,7 @@ const GIT_TIMEOUT_MS = 30_000;
 const MAX_IMAGE_READ_BYTES = 8 * 1024 * 1024;
 const MAX_IMAGE_PREVIEW_READ_BYTES = 2 * 1024 * 1024;
 const MAX_TEXT_FILE_READ_BYTES = 2 * 1024 * 1024;
+const MAX_VISUALIZATION_READ_BYTES = 1024 * 1024;
 const MAX_FILE_DOWNLOAD_BYTES = 100 * 1024 * 1024;
 const FILE_DOWNLOAD_CHUNK_BYTES = 1024 * 1024;
 const BINARY_SNIFF_BYTES = 8 * 1024;
@@ -64,6 +65,7 @@ function handleWorkspaceRequest(rawMessage, sendResponse, captureFileChunkSender
   const id = parsed.id;
   const params = parsed.params || {};
   const transient = method === "workspace/readFileChunk"
+    || method === "workspace/readVisualization"
     || (method === "workspace/readImage" && isHistoryImageReference(params.path));
   const reply = transient ? captureFileChunkSender() : sendResponse;
 
@@ -96,6 +98,9 @@ async function handleWorkspaceMethod(method, params) {
   if (method === "workspace/readFile") {
     return workspaceReadFile(params);
   }
+  if (method === "workspace/readVisualization") {
+    return workspaceReadVisualization(params);
+  }
   if (method === "workspace/readFileChunk") {
     return workspaceReadFileChunk(params);
   }
@@ -125,6 +130,80 @@ async function handleWorkspaceMethod(method, params) {
     default:
       throw workspaceError("unknown_method", `Unknown workspace method: ${method}`);
   }
+}
+
+async function workspaceReadVisualization(params) {
+  const requestedPath = firstNonEmptyString([params.path]);
+  const threadId = firstNonEmptyString([params.threadId]);
+  if (!requestedPath || requestedPath.length > 4096 || /[\u0000-\u001f]/.test(requestedPath)
+      || !/\.html$/i.test(requestedPath) || !/^[a-zA-Z0-9_-]{1,128}$/.test(threadId || "")) {
+    throw workspaceError("visualization_path_not_allowed", "The visualization reference is invalid.");
+  }
+
+  const root = path.resolve(resolveCodexHome(), "visualizations");
+  const realRoot = await realpathOrNull(root);
+  const candidates = path.isAbsolute(requestedPath)
+    ? [requestedPath]
+    : (/[\\/]/.test(requestedPath) ? [] : await findThreadVisualizations(root, threadId, requestedPath));
+  if (!realRoot || candidates.length !== 1) {
+    throw workspaceError("visualization_unavailable", "The visualization is unavailable on the paired host.");
+  }
+  const candidate = candidates[0];
+  const realFile = await realpathOrNull(candidate);
+  if (!realFile) {
+    throw workspaceError("visualization_unavailable", "The visualization is unavailable on the paired host.");
+  }
+
+  // Only the chat's own dated output directory may be read, including after resolving symlinks.
+  const requestedInThread = isThreadVisualizationPath(candidate, root, threadId)
+    || isThreadVisualizationPath(candidate, realRoot, threadId);
+  if (!requestedInThread || !isThreadVisualizationPath(realFile, realRoot, threadId)) {
+    throw workspaceError("visualization_path_not_allowed", "The visualization does not belong to this chat.");
+  }
+
+  const openFlags = fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0) | (fs.constants.O_NONBLOCK || 0);
+  const file = await fs.promises.open(realFile, openFlags);
+  try {
+    const stat = await file.stat();
+    if (!stat.isFile()) {
+      throw workspaceError("visualization_unavailable", "The visualization is unavailable on the paired host.");
+    }
+    if (stat.size > MAX_VISUALIZATION_READ_BYTES) {
+      throw workspaceError("visualization_too_large", "The visualization is too large for the phone preview.");
+    }
+    const bytes = Buffer.alloc(stat.size + 1);
+    const { bytesRead } = await file.read(bytes, 0, bytes.length, 0);
+    if (bytesRead !== stat.size) {
+      throw workspaceError("visualization_unavailable", "The visualization changed while loading. Try again.");
+    }
+    return { fileName: path.basename(realFile), content: decodeUtf8TextFile(bytes.subarray(0, bytesRead)) };
+  } finally {
+    await file.close();
+  }
+}
+
+function isThreadVisualizationPath(file, root, threadId) {
+  const parts = path.relative(root, file).split(path.sep);
+  return parts.length === 5 && /^\d{4}$/.test(parts[0]) && /^\d{2}$/.test(parts[1])
+    && /^\d{2}$/.test(parts[2]) && parts[3] === threadId && /\.html$/i.test(parts[4]);
+}
+
+async function findThreadVisualizations(root, threadId, fileName) {
+  const matches = [];
+  const datedDirectories = async (directory, pattern) => {
+    const entries = await fs.promises.readdir(directory, { withFileTypes: true }).catch(() => []);
+    return entries.filter((entry) => entry.isDirectory() && pattern.test(entry.name)).map((entry) => path.join(directory, entry.name));
+  };
+  for (const year of await datedDirectories(root, /^\d{4}$/)) {
+    for (const month of await datedDirectories(year, /^\d{2}$/)) {
+      for (const day of await datedDirectories(month, /^\d{2}$/)) {
+        const candidate = path.join(day, threadId, fileName);
+        if (await realpathOrNull(candidate)) matches.push(candidate);
+        if (matches.length > 1) return matches;
+      }
+    }
+  }
+  return matches;
 }
 
 async function resolveWorkspaceReadableFile(params) {

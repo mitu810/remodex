@@ -26,6 +26,7 @@ const SOCKET_PROBE_TIMEOUT_MS = 500;
 
 function createDesktopOwnerIpcClient({
   socketPath,
+  methodVersions = METHOD_VERSION_BY_NAME,
   netModule,
   now,
   requestTimeoutMs,
@@ -169,7 +170,7 @@ function createDesktopOwnerIpcClient({
       });
   }
 
-  function sendBroadcast(method, params, { version = METHOD_VERSION_BY_NAME.get(method) || 1 } = {}) {
+  function sendBroadcast(method, params, { version = methodVersions.get(method) || 1 } = {}) {
     ensureConnected();
     if (!socket || socket.destroyed || !isInitialized) {
       return false;
@@ -196,7 +197,7 @@ function createDesktopOwnerIpcClient({
       return Promise.reject(new Error("Desktop IPC is not connected."));
     }
     const requestId = `remodex-owner-${now().toString(36)}-${randomUUID()}`;
-    const envelope = buildIpcRequestEnvelope({ requestId, method, params, clientId, initializing });
+    const envelope = buildIpcRequestEnvelope({ requestId, method, params, clientId, initializing, methodVersions });
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
         pendingResponses.delete(requestId);
