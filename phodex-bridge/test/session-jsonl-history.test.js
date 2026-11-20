@@ -809,6 +809,72 @@ test("parseSessionJsonlTurns deduplicates mirrored mobile user messages", () => 
   assert.equal(userItems[0].timestamp, "2026-05-24T19:30:10.915Z");
 });
 
+test("parseSessionJsonlTurns merges native user completions with their response record", () => {
+  const timestamp = "2026-11-20T04:16:17.878Z";
+  const prompt = "Build a signed IPA";
+  const records = [
+    { type: "response_item", payload: {
+      id: "response-user", type: "message", role: "user",
+      content: [{ type: "input_text", text: prompt }],
+    } },
+    { type: "event_msg", payload: {
+      type: "item_completed", turn_id: "turn-native-user",
+      item: { id: "native-user", type: "UserMessage",
+        content: [{ type: "text", text: prompt }] },
+    } },
+  ];
+
+  for (const ordered of [records, [...records].reverse()]) {
+    const content = [
+      { type: "event_msg", payload: { type: "task_started", turn_id: "turn-native-user" } },
+      ...ordered,
+      { type: "event_msg", payload: { type: "turn_aborted", turn_id: "turn-native-user" } },
+      { type: "event_msg", payload: { type: "task_started", turn_id: "turn-repeated-send" } },
+      { type: "response_item", payload: {
+        id: "second-send", type: "message", role: "user",
+        content: [{ type: "input_text", text: prompt }],
+      } },
+    ].map((entry) => JSON.stringify({ timestamp, ...entry })).join("\n");
+
+    const turns = parseSessionJsonlTurns(content);
+    assert.equal(turns.length, 2);
+    assert.equal(turns[0].status, "aborted");
+    assert.equal(turns[0].items.length, 1, "one input produces one history row");
+    assert.equal(turns[0].items[0].id, "native-user");
+    assert.equal(turns[0].items[0].createdAt, timestamp);
+    assert.equal(turns[1].items.length, 1, "a repeated send in another turn stays separate");
+    assert.equal(turns[1].items[0].id, "second-send");
+  }
+});
+
+test("parseSessionJsonlTurns preserves separate same-text native inputs within one turn", () => {
+  const native = (id) => ({ type: "event_msg", payload: {
+    type: "item_completed", turn_id: "turn-repeated-input",
+    item: { id, type: "UserMessage", content: [{ type: "text", text: "Continue" }] },
+  } });
+  const mirror = (id, withImage = false) => ({ type: "response_item", payload: {
+    id, type: "message", role: "user", content: [
+      { type: "input_text", text: "Continue" },
+      ...(withImage ? [{ type: "image", url: "data:image/png;base64,aW1hZ2U=" }] : []),
+    ],
+  } });
+  for (const records of [
+    [native("native-1"), native("native-2")],
+    [mirror("response-1"), native("native-1"), mirror("response-2"), native("native-2")],
+    [mirror("response-1", true), native("native-1"), mirror("response-2"), native("native-2")],
+  ]) {
+    const content = [
+      { type: "event_msg", payload: { type: "task_started", turn_id: "turn-repeated-input" } },
+      ...records,
+    ].map((entry) => JSON.stringify(entry)).join("\n");
+    const turns = parseSessionJsonlTurns(content);
+    assert.deepEqual(turns[0].items.map((item) => item.id), ["native-1", "native-2"]);
+    if (records[0].payload.content?.some((item) => item.type === "image")) {
+      assert.equal(turns[0].items[0].content.some((item) => item.type === "image"), true);
+    }
+  }
+});
+
 test("parseSessionJsonlTurns deduplicates raw skill text against structured skill input", () => {
   const content = [
     JSON.stringify({

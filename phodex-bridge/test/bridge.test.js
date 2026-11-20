@@ -73,6 +73,7 @@ test("OpenCode requests route by explicit creation provider or namespaced thread
   assert.equal(isOpenCodeRequest({ method: "turn/interrupt", params: { thread_id: "opencode:ses_123" } }, runtime), true);
   assert.equal(isOpenCodeRequest({ method: "thread/start", params: {} }, runtime), false);
   assert.equal(isOpenCodeRequest({ method: "turn/start", params: { threadId: "codex-123" } }, runtime), false);
+  assert.equal(isOpenCodeRequest({ method: "workspace/readFileChunk", params: { threadId: "opencode:ses_123" } }, runtime), false);
 });
 
 test("settings for an unclaimed old task never reach the local Codex writer", async () => {

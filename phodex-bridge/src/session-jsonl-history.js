@@ -606,7 +606,7 @@ function parseSessionJsonlTurns(content, {
             turn.items[fallbackIndex] = item;
             continue;
           }
-          turn.items.push(item);
+          addHistoryItemToTurn(turn, item);
         }
         continue;
       }
@@ -812,8 +812,14 @@ function mergeDuplicateUserHistoryItems(existing, incoming) {
       && normalizeHistoryToken(existing?.type) !== "usermessage";
   const base = preferIncoming ? incoming : existing;
   const fallback = preferIncoming ? existing : incoming;
+  // Keep canonical identity even when the response record carries richer input.
+  const nativeIdentity = [incoming, existing].find((item) => (
+    normalizeString(item?.type).toLowerCase() === "usermessage" && normalizeString(item?.id)
+  ));
   return {
     ...base,
+    id: nativeIdentity?.id || base.id,
+    type: nativeIdentity?.type || base.type,
     content: Array.isArray(base?.content) ? base.content : fallback?.content,
     attachments: Array.isArray(base?.attachments) ? base.attachments : fallback?.attachments,
     createdAt: historyItemTimestamp(base, historyItemTimestamp(fallback)) || undefined,
@@ -837,6 +843,14 @@ function hasStructuredUserHistoryContent(item) {
 
 function areDuplicateUserHistoryItems(first, second) {
   if (!isUserHistoryItem(first) || !isUserHistoryItem(second)) {
+    return false;
+  }
+  // Native UserMessage completions have item identity. Distinct inputs can
+  // repeat the same text in one turn; only their other log representations merge.
+  if (normalizeString(first.type).toLowerCase() === "usermessage"
+    && normalizeString(second.type).toLowerCase() === "usermessage"
+    && normalizeString(first.id) && normalizeString(second.id)
+    && first.id !== second.id) {
     return false;
   }
   const firstText = historyUserItemText(first);

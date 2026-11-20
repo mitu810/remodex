@@ -3,8 +3,7 @@
 const { createHash } = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
-const readline = require("node:readline");
-const { findThreadRolloutPaths, resolveSessionsRoot } = require("./rollout-watch");
+const { readThreadRolloutRecords, resolveSessionsRoot } = require("./rollout-watch");
 
 // An 8 MiB original fits the phone's 16 MiB frame after both layers of base64.
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
@@ -161,7 +160,7 @@ async function recoverHistoryImage(threadId, digest) {
 }
 
 async function findImageInRollouts(root, threadId, digest) {
-  for await (const record of readThreadImageRecords(root, threadId, /data:image\//i)) {
+  for await (const record of readThreadRolloutRecords(root, threadId, /data:image\//i)) {
     const payload = record.payload;
     if (record.type !== "response_item" || payload?.type !== "message" || !Array.isArray(payload.content)) {
       continue;
@@ -184,7 +183,7 @@ async function findLocalImageInHistory(threadId, imagePath, itemId) {
   let embedded = null;
   const matchesPath = (file) => typeof file === "string" && path.isAbsolute(file)
     && path.resolve(file) === imagePath;
-  for await (const record of readThreadImageRecords(resolveSessionsRoot(), threadId, /local_?image|data:image\//i)) {
+  for await (const record of readThreadRolloutRecords(resolveSessionsRoot(), threadId, /local_?image|data:image\//i)) {
     const payload = record.payload;
     if (record.type === "session_meta") embedded = null;
     if (record.type === "event_msg" && payload?.type === "item_completed"
@@ -237,38 +236,6 @@ function originalImageMimeType(data) {
   return null;
 }
 
-async function* readThreadImageRecords(root, threadId, candidatePattern) {
-  for (const rolloutPath of findThreadRolloutPaths(root, threadId)) {
-    const input = fs.createReadStream(rolloutPath, { encoding: "utf8" });
-    const lines = readline.createInterface({ input, crlfDelay: Infinity });
-    let matchesThread = false;
-    try {
-      for await (const line of lines) {
-        if (matchesThread && !candidatePattern.test(line)) continue;
-        let record;
-        try {
-          record = JSON.parse(line);
-        } catch {
-          if (!matchesThread) break;
-          continue;
-        }
-        const payload = record?.payload;
-        if (!matchesThread) {
-          matchesThread = record?.type === "session_meta" && payload?.id === threadId;
-          if (!matchesThread) break;
-          yield record;
-          continue;
-        }
-        if (record) yield record;
-      }
-    } catch (error) {
-      if (error.code !== "ENOENT") throw error;
-    } finally {
-      lines.close();
-      input.destroy();
-    }
-  }
-}
 
 module.exports = {
   isConversationImageContentItem, sanitizeInlineHistoryImageContentItem, isHistoryImageReference,

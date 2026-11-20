@@ -17,6 +17,7 @@ This repo is local-first now. Do not reintroduce hosted-service assumptions, rem
 - Do not create one-off report markdown files in the repo root (security reports, audit notes, scratch summaries, etc.) unless the user explicitly asks for a file. Keep ad-hoc analysis in the chat.
 - For open-source/self-hosted safety, do not log live relay `sessionId` values or other bearer-like pairing identifiers in server logs; redact or hash them instead.
 - Keep user-facing answers compact by default unless the user explicitly asks for more detail.
+- When delivering bridge changes, push the source and publish a new stable GitHub Release with the matching `remodex-bridge-update.zip`. Verify that the app updater can discover and validate the release. Keep personally signed IPAs local.
 
 ## iOS runtime + timeline guardrails
 

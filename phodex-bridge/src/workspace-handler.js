@@ -10,6 +10,7 @@ const os = require("os");
 const path = require("path");
 const { promisify, TextDecoder } = require("util");
 const { resolveCodexGeneratedImagesRoot, resolveCodexHome } = require("./codex-home");
+const { readChatFileScope } = require("./chat-file-reference");
 const { isHistoryImageReference, readHistoryImage, findLocalImageInHistory, originalImageMimeType } = require("./history-image");
 const { gitStatus } = require("./git-handler");
 const {
@@ -49,7 +50,7 @@ const IMAGE_MIME_TYPES_BY_EXTENSION = new Map([
 const GIT_EXEC_MAX_BUFFER_BYTES = 50 * 1024 * 1024;
 const repoMutationLocks = new Map();
 
-function handleWorkspaceRequest(rawMessage, sendResponse, captureFileChunkSender = () => sendResponse) {
+function handleWorkspaceRequest(rawMessage, sendResponse, captureFileChunkSender = () => sendResponse, readProviderThread) {
   let parsed;
   try {
     parsed = JSON.parse(rawMessage);
@@ -64,13 +65,17 @@ function handleWorkspaceRequest(rawMessage, sendResponse, captureFileChunkSender
 
   const id = parsed.id;
   const params = parsed.params || {};
-  const transient = method === "workspace/readFileChunk"
+  const isFileRead = method === "workspace/readFile" || method === "workspace/readFileChunk";
+  const transient = isFileRead
     || method === "workspace/readVisualization"
     || isWorkspaceHistoryImageRead(method, params)
     || (method === "workspace/readImage" && isChatAttachmentRead(workspaceImagePath(params), params));
   const reply = transient ? captureFileChunkSender() : sendResponse;
 
-  handleWorkspaceMethod(method, params)
+  const result = isFileRead && !params.threadId
+    ? Promise.reject(workspaceError("missing_chat_file_scope", "Update the app to open files from this chat."))
+    : handleWorkspaceMethod(method, params, readProviderThread);
+  result
     .then((result) => {
       reply(JSON.stringify({ id, result }));
     })
@@ -92,18 +97,18 @@ function handleWorkspaceRequest(rawMessage, sendResponse, captureFileChunkSender
   return true;
 }
 
-async function handleWorkspaceMethod(method, params) {
+async function handleWorkspaceMethod(method, params, readProviderThread) {
   if (method === "workspace/readImage") {
-    return workspaceReadImage(params);
+    return workspaceReadImage(params, readProviderThread);
   }
   if (method === "workspace/readFile") {
-    return workspaceReadFile(params);
+    return workspaceReadFile(params, readProviderThread);
   }
   if (method === "workspace/readVisualization") {
     return workspaceReadVisualization(params);
   }
   if (method === "workspace/readFileChunk") {
-    return workspaceReadFileChunk(params);
+    return workspaceReadFileChunk(params, readProviderThread);
   }
 
   const cwd = await resolveWorkspaceCwd(params);
@@ -207,27 +212,42 @@ async function findThreadVisualizations(root, threadId, fileName) {
   return matches;
 }
 
-async function resolveWorkspaceReadableFile(params) {
+async function resolveWorkspaceReadableFile(params, readProviderThread) {
   const requestedPath = firstNonEmptyString([params.path, params.filePath, params.localPath]);
   if (!requestedPath) {
     throw workspaceError("missing_file_path", "The request must include a file path.");
   }
 
-  const cwd = await resolveWorkspaceCwd(params);
-  const realWorkspaceRoot = await resolveReadableWorkspaceRoot(cwd);
-  const realFilePath = await resolveWorkspaceFilePath(cwd, requestedPath, realWorkspaceRoot);
+  const chat = await readChatFileScope(params.threadId, readProviderThread);
+  if (params.threadId && !chat) throw filePathNotAllowed();
+  const cwd = chat ? chat.cwd : await resolveWorkspaceCwd(params);
+  const realWorkspaceRoot = cwd ? await resolveReadableWorkspaceRoot(cwd) : null;
+  const absoluteRequest = path.isAbsolute(requestedPath) || cwd ? path.resolve(cwd || "", requestedPath) : null;
+  const realFilePath = cwd
+    ? await resolveWorkspaceFilePath(cwd, requestedPath, realWorkspaceRoot)
+    : absoluteRequest && await realpathOrNull(absoluteRequest);
   if (!realFilePath) {
     throw workspaceError("file_not_found", "The file no longer exists on this Mac.");
   }
-  if (!realWorkspaceRoot || !isPathInside(realFilePath, realWorkspaceRoot)) {
-    throw workspaceError("file_path_not_allowed", "Only files in the current workspace can be viewed.");
+  if ((!realWorkspaceRoot || !isPathInside(realFilePath, realWorkspaceRoot))
+    && !isNamedChatFile(chat, absoluteRequest, realFilePath)) {
+    throw filePathNotAllowed();
   }
   return realFilePath;
 }
 
+function filePathNotAllowed() {
+  return workspaceError("file_path_not_allowed", "Only files in the current workspace or linked in this chat can be opened.");
+}
+
+function isNamedChatFile(chat, requestedPath, realFilePath) {
+  // A link cannot confer access to a different file through a symlink.
+  return requestedPath === realFilePath && chat?.references.has(requestedPath) === true;
+}
+
 // Reads a UTF-8 text file from the active workspace for the phone-side read-only viewer.
-async function workspaceReadFile(params) {
-  const realFilePath = await resolveWorkspaceReadableFile(params);
+async function workspaceReadFile(params, readProviderThread) {
+  const realFilePath = await resolveWorkspaceReadableFile(params, readProviderThread);
 
   const stat = await fs.promises.stat(realFilePath);
   if (!stat.isFile()) {
@@ -268,13 +288,13 @@ async function workspaceReadFile(params) {
 
 // Reads original bytes in bounded chunks. A version check prevents mixing
 // bytes from different versions when a local process edits or replaces the file.
-async function workspaceReadFileChunk(params) {
+async function workspaceReadFileChunk(params, readProviderThread) {
   const { offset, fileVersion: expectedVersion } = params;
   if (!Number.isSafeInteger(offset) || offset < 0) {
     throw workspaceError("invalid_file_offset", "The requested download offset is invalid.");
   }
 
-  const realFilePath = await resolveWorkspaceReadableFile(params);
+  const realFilePath = await resolveWorkspaceReadableFile(params, readProviderThread);
   const original = await fs.promises.lstat(realFilePath, { bigint: true });
   if (!original.isFile()) {
     throw workspaceError("file_not_found", "The path is not a file.");
@@ -337,7 +357,7 @@ function isChatAttachmentRead(requestedPath, params) {
 }
 
 // Reads recognized local image files from the bound repo, Codex image cache, or host temp screenshot folders.
-async function workspaceReadImage(params) {
+async function workspaceReadImage(params, readProviderThread) {
   const requestedPath = workspaceImagePath(params);
   if (!requestedPath) {
     throw workspaceError("missing_image_path", "The request must include an image path.");
@@ -358,7 +378,9 @@ async function workspaceReadImage(params) {
     if (attachedImage) return attachedImage;
   }
 
-  const cwd = firstNonEmptyString([params.cwd, params.currentWorkingDirectory])
+  const chat = params.chatFileLink ? await readChatFileScope(params.threadId, readProviderThread) : null;
+  if (params.chatFileLink && !chat) throw filePathNotAllowed();
+  const cwd = chat ? chat.cwd : firstNonEmptyString([params.cwd, params.currentWorkingDirectory])
     ? await resolveWorkspaceCwd(params)
     : null;
   const imagePath = path.isAbsolute(requestedPath)
@@ -381,9 +403,11 @@ async function workspaceReadImage(params) {
   ]);
   const isAllowed =
     (realWorkspaceRoot && isPathInside(realImagePath, realWorkspaceRoot))
-    || (realGeneratedImagesRoot && isPathInside(realImagePath, realGeneratedImagesRoot))
-    || realTempRoots.some((tempRoot) => isPathInside(realImagePath, tempRoot));
+    || isNamedChatFile(chat, imagePath, realImagePath)
+    || (!chat && ((realGeneratedImagesRoot && isPathInside(realImagePath, realGeneratedImagesRoot))
+      || realTempRoots.some((tempRoot) => isPathInside(realImagePath, tempRoot))));
   if (!isAllowed) {
+    if (chat) throw filePathNotAllowed();
     throw workspaceError("image_path_not_allowed", "Only images in this workspace, Codex generated images, or temporary screenshot files can be previewed.");
   }
 

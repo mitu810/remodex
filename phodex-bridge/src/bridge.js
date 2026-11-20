@@ -1476,6 +1476,7 @@ function startBridgeSession({
       return;
     }
     if (endpointMethods.has(parsedMessage?.method)
+      && !(parsedMessage.method === "workspace/readImage" && parsedMessage.params?.chatFileLink)
       && !isWorkspaceHistoryImageRead(parsedMessage.method, parsedMessage.params)) {
       forwardInboundRequestToCodex(rawMessage);
       return;
@@ -1483,7 +1484,10 @@ function startBridgeSession({
     if (handleThreadContextRequest(rawMessage, sendApplicationResponse, parsedMessage)) {
       return;
     }
-    if (handleWorkspaceRequest(rawMessage, sendApplicationResponse, secureTransport.captureTransientApplicationSender)) {
+    if (handleWorkspaceRequest(rawMessage, sendApplicationResponse, secureTransport.captureTransientApplicationSender, async (threadId) => {
+      const result = await openCodeRuntime.handleRequest({ method: "thread/read", params: { threadId, includeTurns: true } });
+      return result.thread;
+    })) {
       return;
     }
     if (handleProjectRequest(rawMessage, sendApplicationResponse)) {
@@ -5673,7 +5677,7 @@ function shouldSuppressRolloutMirrorForThread(
 
 function isOpenCodeRequest(message, runtime) {
   const method = readString(message?.method);
-  if (!method) {
+  if (!method || method.startsWith("workspace/")) {
     return false;
   }
   if (method === "remodex/opencode/models") {

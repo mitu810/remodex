@@ -5,6 +5,7 @@
 // Depends on: fs, os, path, ./session-state
 
 const fs = require("fs");
+const readline = require("node:readline");
 const os = require("os");
 const path = require("path");
 const { readLastActiveThread } = require("./session-state");
@@ -275,6 +276,39 @@ function findThreadRolloutPaths(root, threadId) {
   return collectRecentRolloutFiles(root, { candidateLimit: Number.POSITIVE_INFINITY })
     .map(({ filePath }) => filePath)
     .filter((filePath) => path.basename(filePath, ".jsonl").split("_", 1)[0].endsWith(`-${threadId}`));
+}
+
+async function* readThreadRolloutRecords(root, threadId, candidatePattern) {
+  for (const rolloutPath of findThreadRolloutPaths(root, threadId)) {
+    const input = fs.createReadStream(rolloutPath, { encoding: "utf8" });
+    const lines = readline.createInterface({ input, crlfDelay: Infinity });
+    let matchesThread = false;
+    try {
+      for await (const line of lines) {
+        if (matchesThread && candidatePattern && !candidatePattern.test(line)) continue;
+        let record;
+        try {
+          record = JSON.parse(line);
+        } catch {
+          if (!matchesThread) break;
+          continue;
+        }
+        const payload = record?.payload;
+        if (!matchesThread) {
+          matchesThread = record?.type === "session_meta" && payload?.id === threadId;
+          if (!matchesThread) break;
+          yield record;
+          continue;
+        }
+        if (record) yield record;
+      }
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+    } finally {
+      lines.close();
+      input.destroy();
+    }
+  }
 }
 
 function findRolloutFileForThread(root, threadId, { fsModule = fs } = {}) {
@@ -975,6 +1009,7 @@ module.exports = {
   readLatestContextWindowUsage,
   resolveSessionsRoot,
   findThreadRolloutPaths,
+  readThreadRolloutRecords,
   findRolloutFileForThread,
   findRecentRolloutFileForContextRead,
   invalidateRolloutLookupCache,
