@@ -10,7 +10,7 @@ const os = require("os");
 const path = require("path");
 const { promisify, TextDecoder } = require("util");
 const { resolveCodexGeneratedImagesRoot, resolveCodexHome } = require("./codex-home");
-const { isHistoryImageReference, readHistoryImage } = require("./history-image");
+const { isHistoryImageReference, readHistoryImage, findLocalImageInHistory, originalImageMimeType } = require("./history-image");
 const { gitStatus } = require("./git-handler");
 const {
   workspaceCheckpointCapture,
@@ -66,7 +66,8 @@ function handleWorkspaceRequest(rawMessage, sendResponse, captureFileChunkSender
   const params = parsed.params || {};
   const transient = method === "workspace/readFileChunk"
     || method === "workspace/readVisualization"
-    || isWorkspaceHistoryImageRead(method, params);
+    || isWorkspaceHistoryImageRead(method, params)
+    || (method === "workspace/readImage" && isChatAttachmentRead(workspaceImagePath(params), params));
   const reply = transient ? captureFileChunkSender() : sendResponse;
 
   handleWorkspaceMethod(method, params)
@@ -330,6 +331,11 @@ function isWorkspaceHistoryImageRead(method, params) {
   return method === "workspace/readImage" && isHistoryImageReference(workspaceImagePath(params));
 }
 
+function isChatAttachmentRead(requestedPath, params) {
+  return typeof params?.threadId === "string" && Boolean(params.threadId)
+    && typeof requestedPath === "string" && path.isAbsolute(requestedPath);
+}
+
 // Reads recognized local image files from the bound repo, Codex image cache, or host temp screenshot folders.
 async function workspaceReadImage(params) {
   const requestedPath = workspaceImagePath(params);
@@ -345,6 +351,11 @@ async function workspaceReadImage(params) {
     });
     if (result) return result;
     throw workspaceError("history_image_unavailable", "Reopen the chat to reload this image, then tap it again.");
+  }
+
+  if (isChatAttachmentRead(requestedPath, params)) {
+    const attachedImage = await workspaceReadChatImage(path.resolve(requestedPath), params);
+    if (attachedImage) return attachedImage;
   }
 
   const cwd = firstNonEmptyString([params.cwd, params.currentWorkingDirectory])
@@ -423,6 +434,55 @@ async function workspaceReadImage(params) {
     dataByteLength: data.length,
     dataBase64: data.toString("base64"),
   };
+}
+
+async function workspaceReadChatImage(imagePath, params) {
+  const attachment = await findLocalImageInHistory(params.threadId, imagePath, params.itemId);
+  if (!attachment) return null;
+
+  const requestedPreviewSize = normalizedPreviewPixelDimension(params);
+  let image = requestedPreviewSize ? attachment.embedded : null;
+  image ||= await readOriginalChatImage(
+    imagePath, attachment.attachedAt, requestedPreviewSize ? MAX_IMAGE_PREVIEW_READ_BYTES : MAX_IMAGE_READ_BYTES
+  );
+  image ||= attachment.embedded;
+  if (!image) {
+    throw workspaceError("image_not_found", "The attached image is no longer available on the paired device.");
+  }
+  const { data, mimeType } = image;
+  return {
+    path: imagePath,
+    fileName: path.basename(imagePath),
+    mimeType,
+    byteLength: data.length,
+    previewMaxPixelDimension: requestedPreviewSize || undefined,
+    ...(params.includeData !== false && params.metadataOnly !== true
+      ? { dataByteLength: data.length, dataBase64: data.toString("base64") } : {}),
+  };
+}
+
+async function readOriginalChatImage(imagePath, attachedAt, limit) {
+  // A path that now resolves to a different file cannot inherit attachment access.
+  if (attachedAt === null || await realpathOrNull(imagePath) !== imagePath) return null;
+  const openFlags = fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0) | (fs.constants.O_NONBLOCK || 0);
+  const file = await fs.promises.open(imagePath, openFlags).catch(() => null);
+  if (!file) return null;
+  try {
+    const stat = await file.stat({ bigint: true });
+    // A new or modified file at the same path does not belong to the old chat attachment.
+    const cutoff = BigInt(attachedAt);
+    if (!stat.isFile() || stat.size > BigInt(limit)
+      || stat.mtimeMs > cutoff || stat.ctimeMs > cutoff || stat.birthtimeMs > cutoff) return null;
+    const data = Buffer.alloc(Number(stat.size) + 1);
+    const { bytesRead } = await file.read(data, 0, data.length, 0);
+    if (BigInt(bytesRead) !== stat.size
+      || downloadFileVersion(await file.stat({ bigint: true })) !== downloadFileVersion(stat)) return null;
+    const bytes = data.subarray(0, bytesRead);
+    const mimeType = originalImageMimeType(bytes);
+    return mimeType ? { data: bytes, mimeType } : null;
+  } finally {
+    await file.close();
+  }
 }
 
 // Enforce the same limits when a configured endpoint supplies the image bytes.

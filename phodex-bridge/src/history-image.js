@@ -2,6 +2,7 @@
 
 const { createHash } = require("node:crypto");
 const fs = require("node:fs");
+const path = require("node:path");
 const readline = require("node:readline");
 const { findThreadRolloutPaths, resolveSessionsRoot } = require("./rollout-watch");
 
@@ -160,13 +161,90 @@ async function recoverHistoryImage(threadId, digest) {
 }
 
 async function findImageInRollouts(root, threadId, digest) {
+  for await (const record of readThreadImageRecords(root, threadId, /data:image\//i)) {
+    const payload = record.payload;
+    if (record.type !== "response_item" || payload?.type !== "message" || !Array.isArray(payload.content)) {
+      continue;
+    }
+    for (const item of payload.content) {
+      if (!isConversationImageContentItem(item)) continue;
+      const inline = inlineImageFromContentItem(item);
+      const image = inline && decodeInlineImage(inline);
+      if (image?.digest === digest) return image;
+    }
+  }
+  return null;
+}
+
+// A typed Codex user attachment can authorize its own path. Text markers only
+// locate the embedded copy and must never grant access to a host file.
+async function findLocalImageInHistory(threadId, imagePath, itemId) {
+  let match = null;
+  let ambiguous = false;
+  let embedded = null;
+  const matchesPath = (file) => typeof file === "string" && path.isAbsolute(file)
+    && path.resolve(file) === imagePath;
+  for await (const record of readThreadImageRecords(resolveSessionsRoot(), threadId, /local_?image|data:image\//i)) {
+    const payload = record.payload;
+    if (record.type === "session_meta") embedded = null;
+    if (record.type === "event_msg" && payload?.type === "item_completed"
+      && /^user_?message$/i.test(payload.item?.type || "") && Array.isArray(payload.item?.content)) {
+      const hasAttachment = payload.item.content.some((item) => (
+        /^local_?image$/i.test(item?.type || "") && matchesPath(item.path)
+      ));
+      if (hasAttachment) {
+        const timestamp = Date.parse(record.timestamp);
+        const candidate = { embedded, attachedAt: Number.isSafeInteger(timestamp) ? timestamp : null };
+        if (itemId && payload.item.id === itemId) return candidate;
+        if (match) ambiguous = true;
+        else match = candidate;
+        embedded = null;
+      }
+    }
+    if (!embedded && record.type === "response_item" && payload?.type === "message"
+      && payload.role === "user" && Array.isArray(payload.content)) {
+      for (let index = 0; index < payload.content.length - 1; index += 1) {
+        const marker = payload.content[index]?.text;
+        const file = typeof marker === "string"
+          && /^<image name=\[Image #\d+\] path="([^"\r\n]+)">$/.exec(marker)?.[1];
+        const item = payload.content[index + 1];
+        if (matchesPath(file) && isConversationImageContentItem(item)) {
+          const inline = inlineImageFromContentItem(item);
+          if (inline) embedded = decodeInlineImage(inline);
+          if (embedded) break;
+        }
+      }
+    }
+  }
+  return ambiguous ? null : match;
+}
+
+function originalImageMimeType(data) {
+  if (data.toString("ascii", 4, 8) === "ftyp") {
+    const brands = [data.toString("ascii", 8, 12)];
+    const boxEnd = Math.min(data.length, data.readUInt32BE(0), 256);
+    for (let offset = 16; offset + 4 <= boxEnd; offset += 4) {
+      brands.push(data.toString("ascii", offset, offset + 4));
+    }
+    if (brands.some((brand) => /^(avif|avis)$/.test(brand))) return "image/avif";
+    if (brands.some((brand) => /^(hei[cmsvx]|hev[cx])$/.test(brand))) return "image/heic";
+    if (brands.some((brand) => /^(mif1|msf1)$/.test(brand))) return "image/heif";
+    return null;
+  }
+  for (const mimeType of IMAGE_EXTENSIONS.keys()) {
+    if (matchesImageHeader(data, mimeType)) return mimeType;
+  }
+  return null;
+}
+
+async function* readThreadImageRecords(root, threadId, candidatePattern) {
   for (const rolloutPath of findThreadRolloutPaths(root, threadId)) {
     const input = fs.createReadStream(rolloutPath, { encoding: "utf8" });
     const lines = readline.createInterface({ input, crlfDelay: Infinity });
     let matchesThread = false;
     try {
       for await (const line of lines) {
-        if (matchesThread && !/data:image\//i.test(line)) continue;
+        if (matchesThread && !candidatePattern.test(line)) continue;
         let record;
         try {
           record = JSON.parse(line);
@@ -178,17 +256,10 @@ async function findImageInRollouts(root, threadId, digest) {
         if (!matchesThread) {
           matchesThread = record?.type === "session_meta" && payload?.id === threadId;
           if (!matchesThread) break;
+          yield record;
           continue;
         }
-        if (record?.type !== "response_item" || payload?.type !== "message" || !Array.isArray(payload.content)) {
-          continue;
-        }
-        for (const item of payload.content) {
-          if (!isConversationImageContentItem(item)) continue;
-          const inline = inlineImageFromContentItem(item);
-          const image = inline && decodeInlineImage(inline);
-          if (image?.digest === digest) return image;
-        }
+        if (record) yield record;
       }
     } catch (error) {
       if (error.code !== "ENOENT") throw error;
@@ -197,7 +268,9 @@ async function findImageInRollouts(root, threadId, digest) {
       input.destroy();
     }
   }
-  return null;
 }
 
-module.exports = { isConversationImageContentItem, sanitizeInlineHistoryImageContentItem, isHistoryImageReference, readHistoryImage };
+module.exports = {
+  isConversationImageContentItem, sanitizeInlineHistoryImageContentItem, isHistoryImageReference,
+  readHistoryImage, findLocalImageInHistory, originalImageMimeType,
+};

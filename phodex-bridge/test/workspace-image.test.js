@@ -18,6 +18,63 @@ const validOnePixelPNG = Buffer.from(
 );
 const IS_WINDOWS_HOST = path.delimiter === ";";
 
+test("a desktop attachment outside the workspace can preview from its own chat", async (t) => {
+  const directory = fs.mkdtempSync(path.join(os.homedir(), ".remodex-chat-image-test-"));
+  const previousHome = process.env.CODEX_HOME;
+  process.env.CODEX_HOME = directory;
+  t.after(() => {
+    if (previousHome === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = previousHome;
+    fs.rmSync(directory, { recursive: true, force: true });
+  });
+  const imagePath = path.join(directory, "Screenshot.png");
+  const untouchedPath = path.join(directory, "Never attached.png");
+  const original = Buffer.concat([validOnePixelPNG, Buffer.from("original")]);
+  fs.writeFileSync(imagePath, original);
+  fs.writeFileSync(untouchedPath, original);
+  const threadId = "01234567-89ab-4cde-89ab-fedcba987654";
+  const otherThreadId = "abcdef12-3456-4abc-89ab-123456789abc";
+  const sessions = path.join(directory, "sessions");
+  fs.mkdirSync(sessions);
+  const records = [
+    { type: "session_meta", payload: { id: threadId } },
+    { type: "response_item", payload: { type: "message", role: "user", content: [
+      { type: "input_text", text: `<image name=[Image #1] path="${imagePath}">` },
+      { type: "input_image", image_url: `data:image/png;base64,${validOnePixelPNG.toString("base64")}` },
+      { type: "input_text", text: "</image>" },
+      { type: "input_text", text: `<image name=[Image #2] path="${untouchedPath}">` },
+      { type: "input_image", image_url: `data:image/png;base64,${validOnePixelPNG.toString("base64")}` },
+    ] } },
+    { type: "event_msg", timestamp: new Date().toISOString(), payload: { type: "item_completed", item: {
+      type: "UserMessage", id: "first-image", content: [{ type: "local_image", path: imagePath }],
+    } } },
+  ];
+  const rollout = path.join(sessions, `rollout-2026-11-20T11-00-00-${threadId}.jsonl`);
+  fs.writeFileSync(rollout, records.map((record) => JSON.stringify(record)).join("\n"));
+  const read = (filePath = imagePath, id = threadId, itemId) => handleWorkspaceMethod("workspace/readImage", {
+    path: filePath, threadId: id, itemId,
+  });
+  await assert.rejects(read(imagePath, otherThreadId), { errorCode: "image_path_not_allowed" });
+  await assert.rejects(read(untouchedPath), { errorCode: "image_path_not_allowed" });
+  const result = await read();
+  assert.equal(result.mimeType, "image/png");
+  assert.equal(result.fileName, "Screenshot.png");
+  assert.equal(result.dataBase64, original.toString("base64"));
+  fs.writeFileSync(imagePath, Buffer.concat([validOnePixelPNG, Buffer.from("unrelated replacement")]));
+  const replacedAt = new Date(Date.now() + 10_000);
+  fs.utimesSync(imagePath, replacedAt, replacedAt);
+  assert.equal((await read()).dataBase64, validOnePixelPNG.toString("base64"));
+  fs.unlinkSync(imagePath);
+  assert.equal((await read()).dataBase64, validOnePixelPNG.toString("base64"));
+
+  const later = structuredClone(records.slice(1));
+  later[0].payload.content[1].image_url = `data:image/png;base64,${original.toString("base64")}`;
+  later[1].payload.item.id = "second-image";
+  fs.appendFileSync(rollout, "\n" + later.map((record) => JSON.stringify(record)).join("\n"));
+  assert.equal((await read(imagePath, threadId, "first-image")).dataBase64, validOnePixelPNG.toString("base64"));
+  assert.equal((await read(imagePath, threadId, "second-image")).dataBase64, original.toString("base64"));
+});
+
 function useProcessPlatform(t, platform) {
   const descriptor = Object.getOwnPropertyDescriptor(process, "platform");
   Object.defineProperty(process, "platform", {
