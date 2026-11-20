@@ -2100,7 +2100,7 @@ test("sanitizeThreadHistoryImagesForRelay sanitizes mixed user content entry-by-
 });
 
 test("a conversation image stays in its history item and can be read on demand", async () => {
-  const { handleWorkspaceMethod } = require("../src/workspace-handler");
+  const { handleWorkspaceMethod, handleWorkspaceRequest } = require("../src/workspace-handler");
   const data = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aIioAAAAASUVORK5CYII=";
   const image = { type: "input_image", filename: "图片.png", image_url: { url: `data:image/png;base64,${data}` } };
   const user = { type: "user_message", id: "prompt-with-image", content: [
@@ -2119,9 +2119,74 @@ test("a conversation image stays in its history item and can be read on demand",
   assert.equal(result.fileName, "图片.png");
   assert.equal(result.dataBase64, data);
   assert.equal(result.mimeType, "image/png");
+  const { response, transient } = await new Promise((resolve) => {
+    handleWorkspaceRequest(JSON.stringify({
+      id: 2, method: "workspace/readImage", params: { filePath: ` ${attachment.url} ` },
+    }), (response) => resolve({ response, transient: false }),
+    () => (response) => resolve({ response, transient: true }));
+  });
+  assert.equal(transient, true);
+  assert.equal(JSON.parse(response).result.dataBase64, data);
   await assert.rejects(() => handleWorkspaceMethod("workspace/readImage", {
     path: `remodex://history-image/${"0".repeat(64)}/arbitrary.png`,
   }), (error) => error.errorCode === "history_image_unavailable");
+});
+
+test("a large inline conversation image can be fetched without embedding it in history", async () => {
+  const { handleWorkspaceMethod } = require("../src/workspace-handler");
+  const pngHeader = Buffer.from("89504e470d0a1a0a", "hex");
+  const data = Buffer.concat([pngHeader, Buffer.alloc(3 * 1024 * 1024 - pngHeader.length)]).toString("base64");
+  const raw = JSON.stringify({ result: { thread: { turns: [{ items: [{
+    type: "user_message",
+    content: [{ type: "input_image", image_url: `data:image/png;base64,${data}` }],
+  }] }] } } });
+  const sanitized = sanitizeThreadHistoryImagesForRelay(raw, "thread/read");
+  assert.ok(sanitized.length < 1024);
+  const [attachment] = JSON.parse(sanitized).result.thread.turns[0].items[0].content;
+  assert.match(attachment.url, /^remodex:\/\/history-image\/[a-f0-9]{64}\//);
+  const result = await handleWorkspaceMethod("workspace/readImage", { path: attachment.url, maxPixelDimension: 1600 });
+  assert.equal(result.dataBase64 === data, true);
+});
+
+test("a saved conversation image reference can be recovered from its original rollout after a bridge restart", async (t) => {
+  const { execFileSync } = require("node:child_process");
+  const { createHash } = require("node:crypto");
+  const { handleWorkspaceMethod } = require("../src/workspace-handler");
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "remodex-history-image-"));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const previousHome = process.env.CODEX_HOME;
+  process.env.CODEX_HOME = home;
+  t.after(() => {
+    if (previousHome === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = previousHome;
+  });
+  const threadId = "01234567-89ab-4cde-89ab-fedcba987654";
+  const otherThreadId = "abcdef12-3456-4abc-89ab-123456789abc";
+  const data = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aIioAAAAASUVORK5CYII=";
+  const digest = createHash("sha256").update("image/png").update(Buffer.from(data, "base64")).digest("hex");
+  const reference = `remodex://history-image/${digest}/${encodeURIComponent("归档图片.png")}`;
+  const sessions = path.join(home, "sessions", "2026", "11", "19");
+  fs.mkdirSync(sessions, { recursive: true });
+  const session = JSON.stringify({ type: "session_meta", payload: { id: threadId } });
+  const message = JSON.stringify({ type: "response_item", payload: { type: "message", role: "user",
+    content: [{ type: "input_image", image_url: `data:image/png;base64,${data}` }],
+  } });
+  fs.writeFileSync(path.join(sessions, `rollout-2026-11-19T10-00-00-${threadId}.jsonl`), `${session}\n${message}\n`);
+  fs.writeFileSync(path.join(sessions, `rollout-2026-11-19T11-00-00-${threadId}_${otherThreadId}.jsonl`), `${session}\n`);
+  await assert.rejects(() => handleWorkspaceMethod("workspace/readImage", {
+    path: reference, threadId: otherThreadId,
+  }), (error) => error.errorCode === "history_image_unavailable");
+
+  // A fresh bridge process has never seen the history response or cached the image.
+  const output = execFileSync(process.execPath, ["-e", `
+    const { handleWorkspaceMethod } = require(process.argv[1]);
+    handleWorkspaceMethod("workspace/readImage", { path: process.argv[2], threadId: process.argv[3] })
+      .then(result => process.stdout.write(JSON.stringify(result)))
+      .catch(error => { process.stderr.write(error.errorCode); process.exitCode = 1; });
+  `, require.resolve("../src/workspace-handler"), reference, threadId], { encoding: "utf8" });
+  const result = JSON.parse(output);
+  assert.equal(result.fileName, "归档图片.png");
+  assert.equal(result.dataBase64, data);
 });
 
 test("sanitizeThreadHistoryImagesForRelay replaces inline history images with lightweight references", () => {

@@ -267,6 +267,16 @@ function resolveSessionsRoot() {
   return path.join(codexHome, "sessions");
 }
 
+// A resumed desktop conversation can have several rollouts with the same thread ID.
+function findThreadRolloutPaths(root, threadId) {
+  if (!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(threadId)) {
+    return [];
+  }
+  return collectRecentRolloutFiles(root, { candidateLimit: Number.POSITIVE_INFINITY })
+    .map(({ filePath }) => filePath)
+    .filter((filePath) => path.basename(filePath, ".jsonl").split("_", 1)[0].endsWith(`-${threadId}`));
+}
+
 function findRolloutFileForThread(root, threadId, { fsModule = fs } = {}) {
   if (!fsModule.existsSync(root)) {
     return null;
@@ -964,6 +974,7 @@ module.exports = {
   contextUsageFromTokenCountPayload,
   readLatestContextWindowUsage,
   resolveSessionsRoot,
+  findThreadRolloutPaths,
   findRolloutFileForThread,
   findRecentRolloutFileForContextRead,
   invalidateRolloutLookupCache,

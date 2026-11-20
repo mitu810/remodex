@@ -40,7 +40,7 @@ const { handleDesktopRequest, restartRunningCodexDesktop } = require("./desktop-
 const { readDaemonConfig, resolveBridgeLogsDir, writeDaemonConfig } = require("./daemon-state");
 const { handleGitRequest } = require("./git-handler");
 const { handleThreadContextRequest } = require("./thread-context-handler");
-const { handleWorkspaceRequest, workspaceImageResponseFits } = require("./workspace-handler");
+const { handleWorkspaceRequest, isWorkspaceHistoryImageRead, workspaceImageResponseFits } = require("./workspace-handler");
 const { sanitizeInlineHistoryImageContentItem } = require("./history-image");
 const { handleProjectRequest, isBridgeProjectMethod } = require("./project-handler");
 const { handlePetRequest } = require("./pet-handler");
@@ -1475,7 +1475,8 @@ function startBridgeSession({
     if (voiceHandler.handleVoiceRequest(rawMessage, sendApplicationResponse, parsedMessage)) {
       return;
     }
-    if (endpointMethods.has(parsedMessage?.method)) {
+    if (endpointMethods.has(parsedMessage?.method)
+      && !isWorkspaceHistoryImageRead(parsedMessage.method, parsedMessage.params)) {
       forwardInboundRequestToCodex(rawMessage);
       return;
     }

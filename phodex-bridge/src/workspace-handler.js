@@ -66,7 +66,7 @@ function handleWorkspaceRequest(rawMessage, sendResponse, captureFileChunkSender
   const params = parsed.params || {};
   const transient = method === "workspace/readFileChunk"
     || method === "workspace/readVisualization"
-    || (method === "workspace/readImage" && isHistoryImageReference(params.path));
+    || isWorkspaceHistoryImageRead(method, params);
   const reply = transient ? captureFileChunkSender() : sendResponse;
 
   handleWorkspaceMethod(method, params)
@@ -322,15 +322,24 @@ function changedDownloadFileError() {
   return workspaceError("file_changed", "The file changed during download. Try again.");
 }
 
+function workspaceImagePath(params) {
+  return firstNonEmptyString([params?.path, params?.filePath, params?.localPath]);
+}
+
+function isWorkspaceHistoryImageRead(method, params) {
+  return method === "workspace/readImage" && isHistoryImageReference(workspaceImagePath(params));
+}
+
 // Reads recognized local image files from the bound repo, Codex image cache, or host temp screenshot folders.
 async function workspaceReadImage(params) {
-  const requestedPath = firstNonEmptyString([params.path, params.filePath, params.localPath]);
+  const requestedPath = workspaceImagePath(params);
   if (!requestedPath) {
     throw workspaceError("missing_image_path", "The request must include an image path.");
   }
 
   if (isHistoryImageReference(requestedPath)) {
-    const result = readHistoryImage(requestedPath, {
+    const result = await readHistoryImage(requestedPath, {
+      threadId: params.threadId,
       includeData: params.includeData !== false && params.metadataOnly !== true,
       previewMaxPixelDimension: normalizedPreviewPixelDimension(params),
     });
@@ -1548,4 +1557,4 @@ function git(cwd, ...args) {
     });
 }
 
-module.exports = { handleWorkspaceMethod, handleWorkspaceRequest, workspaceImageResponseFits };
+module.exports = { handleWorkspaceMethod, handleWorkspaceRequest, isWorkspaceHistoryImageRead, workspaceImageResponseFits };
