@@ -36,6 +36,9 @@ test("health is minimal by default and detailed only when enabled", async () => 
 
 test("a bridge can read the running Relay version from its WebSocket upgrade", async () => {
   await withServer(async ({ port }) => {
+    const health = await fetch(`http://127.0.0.1:${port}/health`, { method: "HEAD" });
+    assert.equal(health.status, 200);
+    assert.equal(health.headers.get("x-remodex-relay-version"), require("./package.json").version);
     const bridge = new WebSocket(`ws://127.0.0.1:${port}/relay/version-check`, { headers: { "x-role": "mac" } });
     const upgrade = new Promise((resolve) => bridge.once("upgrade", resolve));
     await onceOpen(bridge);

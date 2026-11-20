@@ -7,6 +7,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
+const http = require("node:http");
 const Module = require("node:module");
 const net = require("node:net");
 const os = require("node:os");
@@ -1279,8 +1280,12 @@ test("local Codex catalog keeps legacy home chats rootless and repairs a recorde
 });
 
 test("endpoint routing delegates only selected extensions and passes through Codex project requests", async (t) => {
-  const relayServer = new WebSocket.Server({ port: 0 });
-  relayServer.on("headers", (headers) => headers.push("X-Remodex-Relay-Version: 4.0.1"));
+  const versionRequests = [];
+  const relayHTTP = http.createServer((request, response) => {
+    versionRequests.push([request.method, request.url]);
+    response.writeHead(200, { "X-Remodex-Relay-Version": "4.0.1" }).end();
+  });
+  const relayServer = new WebSocket.Server({ server: relayHTTP });
   const relayMessages = [];
   const fakeCodex = createFakeCodexTransport();
   let relaySocket;
@@ -1289,8 +1294,9 @@ test("endpoint routing delegates only selected extensions and passes through Cod
     bridge?.stop();
     relaySocket?.close();
     relayServer.close();
+    relayHTTP.close();
   });
-  await new Promise((resolve) => relayServer.once("listening", resolve));
+  await new Promise((resolve) => relayHTTP.listen(0, "127.0.0.1", resolve));
   relayServer.on("connection", (socket) => {
     relaySocket = socket;
     socket.on("message", (data) => relayMessages.push(JSON.parse(data.toString("utf8"))));
@@ -1298,7 +1304,7 @@ test("endpoint routing delegates only selected extensions and passes through Cod
 
   const { readBridgeConfig } = require("../src/codex-desktop-refresher");
   const config = readBridgeConfig({ env: {
-    REMODEX_RELAY: `ws://127.0.0.1:${relayServer.address().port}`,
+    REMODEX_RELAY: `ws://127.0.0.1:${relayHTTP.address().port}/proxy/relay`,
     REMODEX_CODEX_ENDPOINT: "ws://fake-codex",
     REMODEX_CODEX_ENDPOINT_METHODS: " project/createDirectory, workspace/readImage, workspace/readFile ",
   } });
@@ -1332,6 +1338,7 @@ test("endpoint routing delegates only selected extensions and passes through Cod
   assert.equal(versions.bridgeVersion, require("../package.json").version);
   assert.equal(versions.relayVersion, "4.0.1");
   assert.equal(versions.relayCanInstallRelease, false);
+  assert.deepEqual(versionRequests, [["HEAD", "/proxy/health"]]);
 
   await upstreamRequest("project/list", { limit: 2 }, { result: { data: [] } });
   await upstreamRequest("thread/list", { limit: 2 }, {

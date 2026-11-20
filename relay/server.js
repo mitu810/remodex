@@ -108,7 +108,13 @@ async function handleHTTPRequest(req, res, {
   trustProxy,
 }) {
   const pathname = safePathname(req.url);
-  if (req.method === "GET" && pathname === "/health") {
+  if ((req.method === "GET" || req.method === "HEAD") && pathname === "/health") {
+    res.setHeader("X-Remodex-Relay-Version", relayVersion);
+    res.setHeader("Cache-Control", "no-store");
+    if (req.method === "HEAD") {
+      res.writeHead(200).end();
+      return;
+    }
     return writeJSON(
       res,
       200,

@@ -855,6 +855,7 @@ function startBridgeSession({
   // Keep the local Codex runtime alive across transient relay disconnects.
   let socket = null;
   let relayVersion = null;
+  let relayVersionLookup = null;
   let pairingSession = null;
   let pairingPublished = false;
   let isShuttingDown = false;
@@ -1274,6 +1275,7 @@ function startBridgeSession({
     });
     socket = nextSocket;
     relayVersion = null;
+    relayVersionLookup = null;
     nextSocket.on("upgrade", (response) => {
       if (socket === nextSocket) {
         relayVersion = componentVersion(response.headers["x-remodex-relay-version"]);
@@ -1282,6 +1284,11 @@ function startBridgeSession({
 
     nextSocket.on("open", () => {
       if (isShuttingDown || socket !== nextSocket) return;
+      if (!relayVersion) {
+        relayVersionLookup = readRelayHealthVersion(relayBaseUrl).then((version) => {
+          if (socket === nextSocket) relayVersion = version;
+        });
+      }
       markRelayActivity();
       clearReconnectTimer();
       reconnectAttempt = 0;
@@ -2811,7 +2818,7 @@ function startBridgeSession({
 
   let bridgeUpdatePending = false;
   async function readPackageVersions() {
-    const bridge = await readBridgePackageVersionStatus();
+    const [bridge] = await Promise.all([readBridgePackageVersionStatus(), relayVersionLookup]);
     const localRelay = bridge.bridgeCanInstallRelease ? readManagedRelay() : null;
     return {
       ...bridge,
@@ -2856,6 +2863,27 @@ function startBridgeSession({
 
 function componentVersion(value) {
   return typeof value === "string" && /^\d{1,6}\.\d{1,6}\.\d{1,6}$/.test(value) ? value : null;
+}
+
+// Some reverse proxies strip custom WebSocket upgrade headers but forward
+// ordinary HTTP response headers. Query only the configured relay's health URL.
+async function readRelayHealthVersion(relayBaseUrl) {
+  try {
+    const url = new URL(relayBaseUrl);
+    if (url.protocol !== "ws:" && url.protocol !== "wss:") return null;
+    url.protocol = url.protocol === "wss:" ? "https:" : "http:";
+    url.pathname = url.pathname.replace(/(?:\/relay)?\/?$/, "/health");
+    url.search = "";
+    url.hash = "";
+    url.username = "";
+    url.password = "";
+    const response = await fetch(url, {
+      method: "HEAD", redirect: "error", cache: "no-store", signal: AbortSignal.timeout(1_500),
+    });
+    return response.ok ? componentVersion(response.headers.get("x-remodex-relay-version")) : null;
+  } catch {
+    return null;
+  }
 }
 
 // Holds a single macOS idle-sleep assertion for as long as the bridge process stays alive.
