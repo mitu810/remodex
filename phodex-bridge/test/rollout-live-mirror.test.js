@@ -1352,6 +1352,47 @@ test("desktop-origin mirror stays alive on heartbeat-only active runs", async (t
   assert.ok(heartbeats.length >= 4, `expected heartbeat mirror to stay alive, got ${heartbeats.length}`);
 });
 
+for (const mode of ["live", "during bootstrap", "expanded bootstrap window"]) {
+  test(`desktop mirror preserves UTF-8 across byte boundaries: ${mode}`, (t) => {
+    const threadId = "thread-utf8";
+    const { homeDir, rolloutPath } = createTemporaryRolloutHome({
+      threadId, originator: "Codex Desktop", source: "desktop",
+      lines: [taskStarted("turn-utf8"), userMessage("start")],
+    });
+    const previousCodexHome = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = homeDir;
+    t.after(() => {
+      restoreCodexHome(previousCodexHome);
+      fs.rmSync(homeDir, { recursive: true, force: true });
+    });
+    const outbound = [];
+    let tick;
+    const controller = createRolloutLiveMirrorController({
+      sendApplicationResponse: (line) => outbound.push(JSON.parse(line)),
+      setIntervalFn: (callback) => { tick = callback; },
+      setImmediateFn: () => null,
+    });
+    t.after(() => controller.stopAll());
+    controller.observeInbound(JSON.stringify({ method: "thread/resume", params: { threadId } }));
+    const text = "加载了完整物料📦";
+    const row = Buffer.from(agentMessage(text) + "\n");
+    const split = row.indexOf("完") + 2;
+    if (mode === "expanded bootstrap window") {
+      const next = Buffer.from(agentMessage("next") + "\n");
+      const padding = 4 * 1024 * 1024 - (row.length - split) - next.length;
+      fs.appendFileSync(rolloutPath, Buffer.concat([row, next, Buffer.alloc(padding - 1, 32), Buffer.from("\n")]));
+    } else {
+      if (mode === "live") tick();
+      fs.appendFileSync(rolloutPath, row.subarray(0, split));
+      tick();
+      fs.appendFileSync(rolloutPath, row.subarray(split));
+    }
+    tick();
+    const messages = outbound.filter((item) => item.method === "codex/event/agent_message");
+    assert.equal(messages[0]?.params.message, text);
+  });
+}
+
 test("desktop-origin mirror flushes a valid partial EOF line before stopping", async (t) => {
   const { homeDir, rolloutPath } = createTemporaryRolloutHome({
     threadId: "thread-partial-eof",

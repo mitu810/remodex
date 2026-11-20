@@ -71,6 +71,18 @@ test("endpoint transport only sends outbound messages after the websocket opens"
   assert.deepEqual(socket.sentMessages, ['{"id":"list-2","method":"thread/list"}']);
 });
 
+test("spawn transport preserves UTF-8 across stdout reads", () => {
+  const child = createFakeChild();
+  const transport = createCodexTransport({ platform: "linux", env: {}, spawnImpl: () => child });
+  const lines = [];
+  transport.onMessage((line) => lines.push(line));
+  const expected = '{"text":"完整物料📦"}';
+  for (const byte of Buffer.from(expected + "\n")) {
+    child.emitStdout("data", Buffer.from([byte]));
+  }
+  assert.deepEqual(lines, [expected]);
+});
+
 test("spawn launch plans add the bundled Codex app binary as a fallback on macOS", () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "remodex-codex-app-"));
   const appPath = path.join(tempDir, "Codex.app");

@@ -4,6 +4,7 @@
 // Exports: createRolloutLiveMirrorController
 // Depends on: fs, crypto, path, ./rollout-watch, ./codex-home
 
+const { StringDecoder } = require("node:string_decoder");
 const fs = require("fs");
 const crypto = require("crypto");
 const path = require("path");
@@ -187,6 +188,7 @@ function createThreadRolloutLiveMirror({
   let nextRolloutPathCheckAt = startedAt + ROLLOUT_PATH_RECHECK_MS;
   let lastSize = 0;
   let partialLine = "";
+  let liveDecoder;
   let lastActivityAt = startedAt;
   // Rollout growth only: heartbeats deliberately never refresh this clock, so a
   // desktop process that died mid-run (no terminal event, file frozen) cannot
@@ -281,9 +283,11 @@ function createThreadRolloutLiveMirror({
       }
       if (!didBootstrap) {
         didBootstrap = true;
+        liveDecoder = new StringDecoder("utf8");
         bootstrapFromExistingRollout({
           rolloutPath,
           fileSize,
+          onPartialLine(bytes) { partialLine = liveDecoder.write(bytes); },
           state,
           fsModule,
           sendApplicationResponse,
@@ -318,8 +322,9 @@ function createThreadRolloutLiveMirror({
         // arbitrary deltas to that unknown state: wait for growth, then retry
         // a bounded coherent bootstrap. A new task_started+prompt near EOF
         // recovers immediately; an old huge run remains canonical-history only.
-        const chunk = readFileSlice(rolloutPath, lastSize, fileSize, fsModule);
-        lastSize = fileSize;
+        const bytes = readFileSlice(rolloutPath, lastSize, fileSize, fsModule);
+        lastSize += bytes.length;
+        const chunk = liveDecoder.write(bytes);
         lastActivityAt = currentTime;
         lastGrowthAt = currentTime;
         lastHeartbeatAt = currentTime;
@@ -454,6 +459,7 @@ function createThreadRolloutLiveMirror({
 }
 
 function bootstrapFromExistingRollout({
+  onPartialLine,
   rolloutPath,
   fileSize,
   state,
@@ -471,7 +477,7 @@ function bootstrapFromExistingRollout({
     Math.min(fileSize, DEFAULT_BOOTSTRAP_METADATA_HEAD_BYTES),
     fsModule
   );
-  for (const rawLine of metadataContents.split("\n")) {
+  for (const rawLine of metadataContents.toString("utf8").split("\n")) {
     const parsed = safeParseJSON(rawLine.trim());
     if (parsed?.type === "session_meta") {
       populateSessionMetaState(state, parsed.payload);
@@ -485,6 +491,7 @@ function bootstrapFromExistingRollout({
   state.isDesktopOrigin = true;
 
   const bootstrapWindow = readCoherentBootstrapWindow({
+    onPartialLine,
     rolloutPath,
     fileSize,
     fsModule,
@@ -641,41 +648,43 @@ function bootstrapFromExistingRollout({
 // is read at most once rather than once per retry. The hard cap keeps bootstrap
 // work/memory bounded; a capped window without a coherent opener comes back
 // with `coherent: false` and must never be replayed as history.
-function readCoherentBootstrapWindow({ rolloutPath, fileSize, fsModule }) {
+function readCoherentBootstrapWindow({ rolloutPath, fileSize, fsModule, onPartialLine }) {
   const maxBytes = Math.min(fileSize, DEFAULT_BOOTSTRAP_MAX_BYTES);
   let windowBytes = Math.min(fileSize, DEFAULT_BOOTSTRAP_TAIL_BYTES);
   let tailStart = Math.max(0, fileSize - windowBytes);
-  let contents = readFileSlice(rolloutPath, tailStart, fileSize, fsModule);
-  if (!contents) {
+  let bytes = readFileSlice(rolloutPath, tailStart, fileSize, fsModule);
+  if (!bytes.length) {
     return null;
   }
 
   while (true) {
+    const contents = bytes.toString("utf8");
     const alignedContents = alignedBootstrapContents(contents, tailStart);
     const boundary = inspectBootstrapRunBoundary(alignedContents);
     // When the window already reaches byte zero it is the complete rollout:
     // some legitimate system/continuation turns have no materialized user row.
     // The opener requirement only protects a truncated tail.
-    if (!boundary.hasActiveRun || boundary.hasOpeningUser || tailStart === 0) {
-      return { tailStart, contents, coherent: true };
-    }
-    if (windowBytes >= maxBytes || tailStart === 0) {
-      return {
-        tailStart,
-        contents,
-        coherent: false,
-        alignedContents,
-        boundary,
-      };
+    const coherent = !boundary.hasActiveRun || boundary.hasOpeningUser || tailStart === 0;
+    if (coherent || windowBytes >= maxBytes) {
+      // A writer may still be appending the final JSON record. Retain its
+      // original bytes, including any unfinished UTF-8 character, for live reads.
+      if (bytes.at(-1) !== 10) {
+        const lineStart = bytes.lastIndexOf(10) + 1;
+        if (lineStart > 0 || tailStart === 0) {
+          const lastLine = bytes.subarray(lineStart);
+          if (!safeParseJSON(lastLine.toString("utf8"))) onPartialLine(lastLine);
+        }
+      }
+      return { tailStart, contents, coherent, alignedContents, boundary };
     }
 
     const nextWindowBytes = Math.min(maxBytes, windowBytes * 2);
     const nextTailStart = Math.max(0, fileSize - nextWindowBytes);
     const prefix = readFileSlice(rolloutPath, nextTailStart, tailStart, fsModule);
-    if (!prefix) {
+    if (!prefix.length) {
       return null;
     }
-    contents = `${prefix}${contents}`;
+    bytes = Buffer.concat([prefix, bytes]);
     windowBytes = nextWindowBytes;
     tailStart = nextTailStart;
   }
@@ -2274,14 +2283,14 @@ function readThreadId(params) {
 function readFileSlice(filePath, start, endExclusive, fsModule) {
   const length = Math.max(0, endExclusive - start);
   if (length === 0) {
-    return "";
+    return Buffer.alloc(0);
   }
 
   const fileHandle = fsModule.openSync(filePath, "r");
   try {
     const buffer = Buffer.alloc(length);
     const bytesRead = fsModule.readSync(fileHandle, buffer, 0, length, start);
-    return buffer.toString("utf8", 0, bytesRead);
+    return buffer.subarray(0, bytesRead);
   } finally {
     fsModule.closeSync(fileHandle);
   }

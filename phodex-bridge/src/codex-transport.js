@@ -5,6 +5,7 @@
 // Depends on: child_process, ws, ./codex-launch
 
 const { spawn } = require("child_process");
+const { StringDecoder } = require("node:string_decoder");
 const WebSocket = require("ws");
 const { createCodexLaunchPlans, windowsSystemTool } = require("./codex-launch");
 
@@ -97,6 +98,7 @@ function createSpawnTransport({ env, appPath, platform, spawnImpl = spawn }) {
   }
 
   function attachChildListeners(child, launch) {
+    const stdoutDecoder = new StringDecoder("utf8");
     child.on("spawn", () => {
       if (child !== codex) {
         return;
@@ -168,7 +170,7 @@ function createSpawnTransport({ env, appPath, platform, spawnImpl = spawn }) {
       if (child !== codex) {
         return;
       }
-      stdoutBuffer += chunk.toString("utf8");
+      stdoutBuffer += stdoutDecoder.write(chunk);
       let newlineIndex;
       while ((newlineIndex = stdoutBuffer.indexOf("\n")) !== -1) {
         const line = stdoutBuffer.substring(0, newlineIndex).trim();
