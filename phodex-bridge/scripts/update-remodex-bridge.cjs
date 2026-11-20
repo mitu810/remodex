@@ -142,22 +142,32 @@ function readCoInstalledRelayService(bridgeRoot, {
 } = {}) {
   try {
     const relayRoot = path.join(path.dirname(fs.realpathSync(bridgeRoot)), "relay");
-    const read = {
-      linux: () => readLinuxService(run, "remodex-relay.service"),
-      darwin: () => readMacService(run, os.homedir(), process.getuid(), "com.remodex.relay", "server.js"),
-      win32: () => readWindowsRelayService(run, env),
-    }[platform];
-    if (!read) return null;
-    const service = read();
-    if (!path.isAbsolute(service.nodePath) || path.parse(fs.realpathSync(service.nodePath)).name.toLowerCase() !== "node"
-      || !path.isAbsolute(service.entryPath) || fs.realpathSync(relayRoot) !== relayRoot
-      || fs.realpathSync(service.entryPath) !== path.join(relayRoot, "server.js")) return null;
+    if (fs.realpathSync(relayRoot) !== relayRoot) return null;
     const { name, version } = JSON.parse(fs.readFileSync(path.join(relayRoot, "package.json"), "utf8"));
-    if (name !== "remodex-relay" || service.state() !== "active") return null;
-    return { ...service, root: relayRoot, version };
+    if (name !== "remodex-relay") return null;
+    const readCandidates = {
+      linux: [() => readLinuxService(run, "remodex-relay.service")],
+      darwin: ["com.remodex.relay", "com.remodex.loopback-relay"].map((label) => (
+        () => readMacService(run, os.homedir(), process.getuid(), label, "server.js")
+      )),
+      win32: [() => readWindowsRelayService(run, env)],
+    }[platform] ?? [];
+    for (const read of readCandidates) {
+      try {
+        const service = read();
+        if (path.isAbsolute(service.nodePath) && path.parse(fs.realpathSync(service.nodePath)).name.toLowerCase() === "node"
+          && path.isAbsolute(service.entryPath) && fs.realpathSync(service.entryPath) === path.join(relayRoot, "server.js")
+          && service.state() === "active") {
+          return { ...service, root: relayRoot, version };
+        }
+      } catch {
+        // An unavailable registration does not rule out the other launchd label.
+      }
+    }
   } catch {
-    return null;
+    // An installation without a valid sibling Relay cannot update it.
   }
+  return null;
 }
 
 function installedBridge(service) {

@@ -424,6 +424,20 @@ test('combined updates only target the active Relay registered in the same serve
   assert.equal(read(path.join(relay, 'server.js'), 'active')?.version, '4.0.8');
   assert.equal(read(path.join(relay, 'server.js'), 'inactive'), null);
   assert.equal(read(path.join(bridge, 'server.js'), 'active'), null);
+
+  const macRelay = readCoInstalledRelayService(bridge, {
+    platform: 'darwin',
+    run(file, args) {
+      if (file === '/usr/bin/plutil') {
+        const legacy = args.at(-1).endsWith('/com.remodex.loopback-relay.plist');
+        return JSON.stringify({ ProgramArguments: [process.execPath, path.join(legacy ? relay : bridge, 'server.js')] });
+      }
+      assert.equal(file, '/bin/launchctl');
+      assert.match(args.at(-1), /\/com\.remodex\.loopback-relay$/);
+      return 'pid = 123';
+    },
+  });
+  assert.equal(macRelay?.version, '4.0.8');
 });
 
 for (const failComponent of [null, 'relay', 'bridge']) {
