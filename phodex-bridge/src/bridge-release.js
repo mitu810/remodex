@@ -116,9 +116,17 @@ async function stageBridgeRelease() {
   }
 }
 
-async function scheduleInstalledBridgeUpdate({ logsDir }) {
+function readLocalRelayUpdateService() {
+  if (!supportsBridgeReleaseArchive()) return null;
+  return require(updaterPath).readCoInstalledRelayService(bridgeRoot);
+}
+
+async function scheduleInstalledBridgeUpdate({ logsDir, includeRelay = false }) {
   if (!supportsInstalledBridgeUpdate()) {
     throw new Error("Use the bridge update package from GitHub Releases on this computer.");
+  }
+  if (includeRelay && !readLocalRelayUpdateService()) {
+    throw new Error("No active Relay from this server kit is managed by this user.");
   }
   const release = await stageBridgeRelease();
   const label = `com.remodex.bridge-release-update.${path.basename(release.stage)}`;
@@ -132,6 +140,7 @@ async function scheduleInstalledBridgeUpdate({ logsDir }) {
     await execFileAsync("/bin/launchctl", [
       "submit", "-l", label, "-o", log, "-e", log, "--",
       process.execPath, worker, "--managed", release.version, label, currentCLI(),
+      ...(includeRelay ? ["relay"] : []),
     ], { timeout: 10_000 });
     return release.version;
   } catch (error) {
@@ -143,6 +152,7 @@ async function scheduleInstalledBridgeUpdate({ logsDir }) {
 module.exports = {
   fetchLatestBridgeRelease,
   parseBridgeRelease,
+  readLocalRelayUpdateService,
   scheduleInstalledBridgeUpdate,
   stageBridgeRelease,
   supportsBridgeReleaseArchive,

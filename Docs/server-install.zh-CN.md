@@ -108,6 +108,12 @@ node setup-server.cjs bridge 'wss://mac.example.com/relay'
 
 ## 升级已有安装
 
+### 同时更新本机 Bridge 和 Relay
+
+从 4.0.9 起，支持此功能的 App 会在「设备与桥接」分别显示 Bridge 和当前 Relay 的版本。若本机活动的 Relay 服务由同一用户管理，并且指向 Bridge 同一套服务端安装目录，App 会显示「更新本机桥接与中继」。更新沿用原来的服务、地址和配对，任一组件启动失败时会尝试恢复两个组件的旧版本。
+
+Linux 和 Windows 从 4.0.8 或更早版本升级后，需要重启一次已注册的 Bridge 服务，以加载新版更新管理进程。Linux 可以用运行 Bridge 的账号执行 `systemctl --user restart remodex-bridge.service`。在命令行使用新版更新脚本时，可加 `--with-relay` 同时更新同一套安装里的两个组件。
+
 从 [本仓库 GitHub Releases](https://github.com/mitu810/remodex/releases/latest) 下载 `remodex-bridge-update.zip` 和 `update-remodex-bridge.cjs`。把两个文件放在同一个目录中，无需解压 ZIP。用原来运行 bridge 的账号进入该目录，然后执行 `node update-remodex-bridge.cjs`。Windows、Linux 和 macOS 使用同一组文件。脚本会备份旧 bridge，沿用已有服务配置并重启 bridge。已重新连接的 iPhone 可以继续使用已保存的配对。首次接入 GitHub 更新也可使用这个脚本。
 
 Windows、Linux 和 macOS 的服务端安装包支持从 iPhone 的 **设置 → 桥接** 发起更新。Windows 和 Linux 若仍在使用 4.0.1 或更早的版本，先在电脑上运行一次本页的更新脚本，将 bridge 升级到 4.0.2 或更新版本。后续更新可从 iPhone 发起。更新时连接会短暂中断，原有 Windows 计划任务、Linux systemd 用户服务和开机自启配置会保留。

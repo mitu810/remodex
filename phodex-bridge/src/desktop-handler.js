@@ -136,8 +136,10 @@ async function handleDesktopMethod(method, params, options = {}) {
       return readBridgePreferences(options);
     case "desktop/preferences/update":
       return updateBridgePreferences(params, options);
+    case "desktop/bridge/versions":
+      return options.readPackageVersions();
     case "desktop/bridge/updateAndRestart":
-      return updateBridgePackageAndRestart(options);
+      return updateBridgePackageAndRestart(options, params);
     default:
       throw desktopError("unknown_method", `Unknown desktop method: ${method}`);
   }
@@ -377,7 +379,7 @@ async function updateBridgePreferences(params, options = {}) {
   });
 }
 
-async function updateBridgePackageAndRestart(options = {}) {
+async function updateBridgePackageAndRestart(options = {}, params) {
   if (typeof options.updateBridgePackageAndRestart !== "function") {
     throw desktopError(
       "unsupported_bridge_update",
@@ -385,7 +387,7 @@ async function updateBridgePackageAndRestart(options = {}) {
     );
   }
 
-  return options.updateBridgePackageAndRestart();
+  return options.updateBridgePackageAndRestart({ includeRelay: params?.includeRelay === true });
 }
 
 function resolveThreadId(params) {

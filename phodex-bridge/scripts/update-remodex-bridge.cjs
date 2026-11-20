@@ -44,32 +44,32 @@ function powerShell(run, env, script, data) {
   ]);
 }
 
-function readLinuxService(run) {
+function readLinuxService(run, unit = LINUX_SERVICE) {
   const systemctl = (...args) => run("systemctl", ["--user", ...args]);
-  const definition = systemctl("cat", LINUX_SERVICE);
+  const definition = systemctl("cat", unit);
   const start = definition.split(/\r?\n/).filter((line) => /^\s*ExecStart\s*=/.test(line)).at(-1);
   // Remodex writes its systemd command as two quoted absolute paths followed by the state directory.
-  const args = start?.match(/^\s*ExecStart\s*=\s*:?\s*("(?:[^"\\]|\\.)*")\s+("(?:[^"\\]|\\.)*")/);
+  const args = start?.match(/^\s*ExecStart\s*=\s*:?\s*("(?:[^"\\]|\\.)*"|[^\s"\\]+)\s+("(?:[^"\\]|\\.)*"|[^\s"\\]+)(?:\s|$)/);
   if (!args) throw new Error("无法从 systemd 服务中识别 Remodex 的安装路径。");
-  const [nodePath, entryPath] = args.slice(1).map((value) => JSON.parse(value).replaceAll("%%", "%"));
+  const [nodePath, entryPath] = args.slice(1).map((value) => (value.startsWith('"') ? JSON.parse(value) : value).replaceAll("%%", "%"));
   return {
     nodePath, entryPath,
-    stop: () => systemctl("stop", LINUX_SERVICE),
+    stop: () => systemctl("stop", unit),
     start: () => {
-      systemctl("reset-failed", LINUX_SERVICE);
-      systemctl("start", LINUX_SERVICE);
+      systemctl("reset-failed", unit);
+      systemctl("start", unit);
     },
-    state: () => systemctl("show", LINUX_SERVICE, "--property=ActiveState", "--value"),
+    state: () => systemctl("show", unit, "--property=ActiveState", "--value"),
   };
 }
 
-function readMacService(run, home, uid) {
-  const plist = path.join(home, "Library", "LaunchAgents", MAC_SERVICE + ".plist");
+function readMacService(run, home, uid, name = MAC_SERVICE, scriptName = "remodex.js") {
+  const plist = path.join(home, "Library", "LaunchAgents", name + ".plist");
   const domain = `gui/${uid}`;
-  const label = `${domain}/${MAC_SERVICE}`;
+  const label = `${domain}/${name}`;
   const launch = JSON.parse(run("/usr/bin/plutil", ["-convert", "json", "-o", "-", plist]));
   const args = launch.ProgramArguments || [];
-  const entry = args.findIndex((arg) => path.basename(arg) === "remodex.js");
+  const entry = args.findIndex((arg) => path.basename(arg) === scriptName);
   if (entry < 1) throw new Error("无法从 LaunchAgent 中识别 Remodex 的安装路径。");
   function printJob() {
     try {
@@ -111,6 +111,53 @@ function readWindowsService(run, env, username) {
     start: () => invoke("Start-ScheduledTask -InputObject $task"),
     state: () => ({ Running: "active", Queued: "activating" })[invoke("$task.State.ToString()")] || "inactive",
   };
+}
+
+function readWindowsRelayService(run, env) {
+  const invoke = (script) => powerShell(run, env, `
+    $task = Get-ScheduledTask -TaskName 'Remodex-Relay' -TaskPath '\\';
+    $account = $task.Principal.UserId;
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent();
+    $sid = if ($account -match '^S-1-') { $account } else {
+      ([Security.Principal.NTAccount]::new($account)).Translate([Security.Principal.SecurityIdentifier]).Value
+    };
+    if ($sid -ne $identity.User.Value -or $task.Actions.Count -ne 1) { throw 'Relay task is not owned by this user'; }
+    ${script}
+  `, {});
+  const action = JSON.parse(invoke("$task.Actions[0] | Select-Object Execute, Arguments | ConvertTo-Json -Compress"));
+  // The server kit registers Node directly with an optional env file, followed by server.js.
+  const match = action.Arguments?.match(/^\s*(?:"--env-file=[^"]+"\s+)?"([^"\r\n]+)"\s*$/);
+  if (!match) throw new Error("Could not read the registered Relay script path.");
+  return {
+    nodePath: action.Execute,
+    entryPath: match[1],
+    stop: () => invoke("if ($task.State.ToString() -in @('Running', 'Queued')) { Stop-ScheduledTask -InputObject $task }"),
+    start: () => invoke("Start-ScheduledTask -InputObject $task"),
+    state: () => ({ Running: "active", Queued: "activating" })[invoke("$task.State.ToString()")] || "inactive",
+  };
+}
+
+function readCoInstalledRelayService(bridgeRoot, {
+  platform = process.platform, env = process.env, run = (file, args) => command(file, args, { timeout: 2500 }),
+} = {}) {
+  try {
+    const relayRoot = path.join(path.dirname(fs.realpathSync(bridgeRoot)), "relay");
+    const read = {
+      linux: () => readLinuxService(run, "remodex-relay.service"),
+      darwin: () => readMacService(run, os.homedir(), process.getuid(), "com.remodex.relay", "server.js"),
+      win32: () => readWindowsRelayService(run, env),
+    }[platform];
+    if (!read) return null;
+    const service = read();
+    if (!path.isAbsolute(service.nodePath) || path.parse(fs.realpathSync(service.nodePath)).name.toLowerCase() !== "node"
+      || !path.isAbsolute(service.entryPath) || fs.realpathSync(relayRoot) !== relayRoot
+      || fs.realpathSync(service.entryPath) !== path.join(relayRoot, "server.js")) return null;
+    const { name, version } = JSON.parse(fs.readFileSync(path.join(relayRoot, "package.json"), "utf8"));
+    if (name !== "remodex-relay" || service.state() !== "active") return null;
+    return { ...service, root: relayRoot, version };
+  } catch {
+    return null;
+  }
 }
 
 function installedBridge(service) {
@@ -165,77 +212,124 @@ async function updateBridge(service, archive, options) {
 }
 
 async function replaceBridge(service, archive, bridge, {
-  platform = process.platform, env = process.env, run = command, pause = delay, log = console.log, expectedVersion,
+  platform = process.platform, env = process.env, run = command, pause = delay, log = console.log,
+  expectedVersion, includeRelay = false, relayService,
 } = {}) {
+  if (includeRelay) {
+    relayService ||= readCoInstalledRelayService(bridge);
+    if (!relayService) throw new Error("No active Relay from this server kit is managed by this user.");
+  }
+  const components = [{
+    kind: "bridge", name: "phodex-bridge", root: bridge, service,
+    smokeTest: 'require("./src/bridge"); require("./src/service-entry");',
+  }];
+  if (includeRelay) {
+    components.unshift({
+      kind: "relay", name: "relay", root: relayService.root, service: relayService,
+      smokeTest: 'require("./server");',
+    });
+  }
   const workspace = fs.mkdtempSync(path.join(path.dirname(bridge), ".remodex-bridge-update-"));
-  const staging = path.join(workspace, "release", "phodex-bridge");
-  const backup = path.join(workspace, "previous-bridge");
+  const release = path.join(workspace, "release");
   let keepWorkspace = false;
-  log(`正在更新 ${bridge}`);
   try {
     extractArchive(archive, workspace, platform, run, env);
-    const releaseVersion = JSON.parse(fs.readFileSync(path.join(staging, "package.json"), "utf8")).version;
-    if (expectedVersion && releaseVersion !== expectedVersion) {
-      throw new Error("更新包内的 bridge 版本与 GitHub 发布版本不一致。");
+    for (const component of components) {
+      component.staging = path.join(release, component.name);
+      component.backup = path.join(workspace, `previous-${component.kind}`);
+      const version = JSON.parse(fs.readFileSync(path.join(component.staging, "package.json"), "utf8")).version;
+      const installedVersion = JSON.parse(fs.readFileSync(path.join(component.root, "package.json"), "utf8")).version;
+      if (typeof version !== "string" || !/^\d+\.\d+\.\d+$/.test(version) || (expectedVersion && version !== expectedVersion)
+        || (installedVersion && version.localeCompare(installedVersion, "en", { numeric: true }) < 0)) {
+        throw new Error(`${component.kind} release version does not match the requested update or would downgrade the installation.`);
+      }
+      const lockName = "package-lock.json";
+      const oldModules = path.join(component.root, "node_modules");
+      const oldLock = path.join(component.root, lockName);
+      if (fs.existsSync(oldModules) && fs.existsSync(oldLock)
+          && dependencyLocksMatch(oldLock, path.join(component.staging, lockName))) {
+        fs.cpSync(oldModules, path.join(component.staging, "node_modules"), { recursive: true, verbatimSymlinks: true });
+      } else {
+        log(`Installing dependencies for ${component.kind}…`);
+        const node = component.service.nodePath;
+        run(node, [path.join(release, "setup-server.cjs"), "install", component.kind], {
+          cwd: release, timeout: 180_000,
+          env: { ...env, PATH: [path.dirname(node), env.PATH].filter(Boolean).join(path.delimiter) },
+        });
+      }
+      run(component.service.nodePath, ["-e", component.smokeTest], { cwd: component.staging });
+      component.wasRunning = ["active", "activating"].includes(component.service.state());
     }
-    const lockName = "package-lock.json";
-    const wasInstalled = path.join(bridge, "node_modules");
-    const currentLock = path.join(bridge, lockName);
-    const lockMatches = fs.existsSync(currentLock)
-      && fs.readFileSync(currentLock).equals(fs.readFileSync(path.join(staging, lockName)));
-    if (lockMatches && fs.existsSync(wasInstalled)) {
-      fs.cpSync(wasInstalled, path.join(staging, "node_modules"), { recursive: true, verbatimSymlinks: true });
-    } else {
-      log("正在为新版 bridge 安装匹配的依赖…");
-      run(service.nodePath, [path.join(workspace, "release", "setup-server.cjs"), "install", "bridge"], {
-        cwd: path.dirname(staging), timeout: 180_000,
-        env: { ...env, PATH: [path.dirname(service.nodePath), env.PATH].filter(Boolean).join(path.delimiter) },
-      });
-    }
-    run(service.nodePath, ["-e", 'require("./src/bridge"); require("./src/service-entry");'], { cwd: staging });
 
-    const wasRunning = ["active", "activating"].includes(service.state());
-    let stopped = false;
-    let swapped = false;
+    const stopOrder = [...components].reverse();
     try {
-      service.stop();
-      stopped = true;
-      await waitForService(service, "inactive", pause);
-      fs.renameSync(bridge, backup);
-      keepWorkspace = true;
-      fs.renameSync(staging, bridge);
-      swapped = true;
-      service.start();
-      await waitForService(service, "active", pause);
+      for (const component of stopOrder) {
+        await component.service.stop();
+        component.stopped = true;
+        await waitForService(component.service, "inactive", pause);
+      }
+      for (const component of components) {
+        if (component.kind === "relay") preserveRelayLocalFiles(component.root, component.staging);
+        fs.renameSync(component.root, component.backup);
+        keepWorkspace = true;
+        fs.renameSync(component.staging, component.root);
+        component.swapped = true;
+      }
+      for (const component of components) {
+        component.started = true;
+        await component.service.start();
+        await waitForService(component.service, "active", pause);
+      }
     } catch (error) {
       try {
-        if (swapped) {
-          service.stop();
-          await waitForService(service, "inactive", pause);
-          fs.renameSync(bridge, path.join(workspace, "failed-update"));
+        for (const component of stopOrder) {
+          if (!component.started) continue;
+          await component.service.stop();
+          await waitForService(component.service, "inactive", pause);
         }
-        if (fs.existsSync(backup)) fs.renameSync(backup, bridge);
-        if (stopped && wasRunning) {
-          service.start();
-          await waitForService(service, "active", pause);
+        for (const component of components) {
+          if (component.swapped) fs.renameSync(component.root, path.join(workspace, `failed-${component.kind}`));
+          if (fs.existsSync(component.backup)) fs.renameSync(component.backup, component.root);
+          if (component.stopped && component.wasRunning) {
+            await component.service.start();
+            await waitForService(component.service, "active", pause);
+          }
         }
       } catch (rollbackError) {
         keepWorkspace = true;
-        throw new Error(`${error.message}\n自动恢复失败：${rollbackError.message}\n更新备份目录：${workspace}`);
+        throw new Error(`${error.message}\nAutomatic recovery failed: ${rollbackError.message}\nBackup: ${workspace}`);
       }
       keepWorkspace = false;
-      throw new Error(`${error.message}\n原 bridge 文件已保留或恢复。`);
+      throw new Error(`${error.message}\nThe previous installation was preserved or restored.`);
     }
-    fs.rmSync(path.join(workspace, "release"), { recursive: true, force: true });
-    log(`bridge 已更新并重启。备份：${backup}`);
-    return backup;
+    fs.rmSync(release, { recursive: true, force: true });
+    log(`Updated and restarted ${components.map(({ kind }) => kind).join(" and ")}. Backup: ${workspace}`);
+    return components.at(-1).backup;
   } finally {
     if (!keepWorkspace) fs.rmSync(workspace, { recursive: true, force: true });
   }
 }
 
+// Both lockfiles describe the same dependencies when only the release version changes.
+function dependencyLocksMatch(current, next) {
+  const dependencies = (file) => {
+    const lock = JSON.parse(fs.readFileSync(file, "utf8"));
+    delete lock.version;
+    if (lock.packages?.[""]) delete lock.packages[""].version;
+    return JSON.stringify(lock);
+  };
+  return dependencies(current) === dependencies(next);
+}
+
+function preserveRelayLocalFiles(current, next) {
+  for (const filename of fs.readdirSync(current)) {
+    if (filename === "node_modules" || fs.existsSync(path.join(next, filename))) continue;
+    fs.cpSync(path.join(current, filename), path.join(next, filename), { recursive: true, verbatimSymlinks: true });
+  }
+}
+
 async function main() {
-  const [mode, expectedVersion, label, expectedEntry] = process.argv.slice(2);
+  const [mode, expectedVersion, label, expectedEntry, component] = process.argv.slice(2);
   const managed = mode === "--managed" && process.platform === "darwin";
   if (managed && (!path.basename(__dirname).startsWith("remodex-bridge-release-")
       || label !== `com.remodex.bridge-release-update.${path.basename(__dirname)}`
@@ -252,7 +346,7 @@ async function main() {
   const read = readers[process.platform];
   if (!read) throw new Error("此更新脚本支持 Windows、Linux 和 macOS。");
   if (!managed) {
-    await updateBridge(read(), archive);
+    await updateBridge(read(), archive, { includeRelay: mode === "--with-relay" });
     return;
   }
   try {
@@ -262,7 +356,7 @@ async function main() {
     if (fs.realpathSync(service.entryPath) !== fs.realpathSync(expectedEntry)) {
       throw new Error("bridge 服务的安装路径已更改，请重新发起更新。");
     }
-    await updateBridge(service, archive, { expectedVersion });
+    await updateBridge(service, archive, { expectedVersion, includeRelay: component === "relay" });
   } catch (error) {
     console.error(error.message);
     process.exitCode = 1;
@@ -281,4 +375,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { readLinuxService, readMacService, readWindowsService, updateBridge };
+module.exports = { readCoInstalledRelayService, readLinuxService, readMacService, readWindowsService, updateBridge };

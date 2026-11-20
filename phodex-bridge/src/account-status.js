@@ -52,9 +52,7 @@ function composeAccountStatus({
       bridgeReleaseRepository: bridgeVersionInfo.bridgeReleaseRepository,
       bridgeCanInstallRelease: bridgeVersionInfo.bridgeCanInstallRelease === true,
     } : {}),
-    codexTransportMode: normalizeString(transportMode) || null,
-    hostPlatform: normalizeHostPlatform(hostPlatform),
-    hostCapabilities: deriveHostCapabilities(hostPlatform, bridgeVersionInfo?.bridgeCanInstallRelease === true),
+    ...bridgeHostMetadata(hostPlatform, transportMode, bridgeVersionInfo?.bridgeCanInstallRelease === true),
   };
 }
 
@@ -183,7 +181,16 @@ function deriveHostCapabilities(platform, canInstallRelease) {
   };
 }
 
+function bridgeHostMetadata(platform, transportMode, canInstallRelease) {
+  return {
+    codexTransportMode: normalizeString(transportMode) || null,
+    hostPlatform: normalizeHostPlatform(platform),
+    hostCapabilities: deriveHostCapabilities(platform, canInstallRelease),
+  };
+}
+
 module.exports = {
+  bridgeHostMetadata,
   composeAccountStatus,
   composeSanitizedAuthStatusFromSettledResults,
   isChatGPTAuthMethod,

@@ -12,7 +12,10 @@ function send(child, message) {
 }
 
 function applyRelease(service, archive, options) {
-  const { updateBridge } = require("../scripts/update-remodex-bridge.cjs");
+  // The supervisor survives directory swaps, so load the currently installed updater each time.
+  const updaterPath = require.resolve("../scripts/update-remodex-bridge.cjs");
+  delete require.cache[updaterPath];
+  const { updateBridge } = require(updaterPath);
   return updateBridge(service, archive, options);
 }
 
@@ -72,8 +75,9 @@ function runNativeServiceSupervisor({
       next.on("message", (message) => {
         if (next !== child) return;
         if (message?.kind === "status") ready = message.ready === true;
-        if (message?.kind === "update") void installUpdate(next);
+        if (message?.kind === "update") void installUpdate(next, message.includeRelay === true);
       });
+      void send(next, { kind: "updateCapabilities", includeRelay: true }).catch(() => {});
       next.on("error", (error) => record(`Bridge worker error: ${error.message}`));
       next.once("close", (code) => {
         if (next !== child) return;
@@ -88,7 +92,7 @@ function runNativeServiceSupervisor({
       try { log(message); } catch { console.error(message); }
     }
 
-    async function installUpdate(requester) {
+    async function installUpdate(requester, includeRelay) {
       if (updating || shuttingDown) {
         await send(requester, { kind: "updateResult", error: "A bridge update or shutdown is already in progress." }).catch(() => {});
         return;
@@ -97,13 +101,19 @@ function runNativeServiceSupervisor({
       let release;
       let acknowledged = false;
       try {
+        if (includeRelay) {
+          const { readCoInstalledRelayService } = require("../scripts/update-remodex-bridge.cjs");
+          if (!readCoInstalledRelayService(path.dirname(path.dirname(entryPath)))) {
+            throw new Error("No active Relay from this server kit is managed by this user.");
+          }
+        }
         release = await stageUpdate();
         if (shuttingDown) throw new Error("The bridge service is stopping.");
         await send(requester, { kind: "updateResult", version: release.version });
         acknowledged = true;
         // Allow the bridge to acknowledge the phone before its transport closes.
         await delay(1500);
-        await applyUpdate(service, release.archive, { expectedVersion: release.version, log: record });
+        await applyUpdate(service, release.archive, { expectedVersion: release.version, includeRelay, log: record });
       } catch (error) {
         record(`Bridge update failed: ${error.message}`);
         if (!acknowledged) await send(requester, { kind: "updateResult", error: error.message }).catch(() => {});

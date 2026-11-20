@@ -7,6 +7,7 @@
 const http = require("http");
 const { monitorEventLoopDelay } = require("perf_hooks");
 const { WebSocketServer } = require("ws");
+const { version: relayVersion } = require("./package.json");
 const {
   setupRelay,
   getRelayStats,
@@ -55,6 +56,9 @@ function createRelayServer({
   const wss = new WebSocketServer({
     noServer: true,
     perMessageDeflate: true,
+  });
+  wss.on("headers", (headers) => {
+    headers.push(`X-Remodex-Relay-Version: ${relayVersion}`);
   });
   setupRelay(wss, relayOptions);
 

@@ -1280,6 +1280,7 @@ test("local Codex catalog keeps legacy home chats rootless and repairs a recorde
 
 test("endpoint routing delegates only selected extensions and passes through Codex project requests", async (t) => {
   const relayServer = new WebSocket.Server({ port: 0 });
+  relayServer.on("headers", (headers) => headers.push("X-Remodex-Relay-Version: 4.0.1"));
   const relayMessages = [];
   const fakeCodex = createFakeCodexTransport();
   let relaySocket;
@@ -1326,6 +1327,11 @@ test("endpoint routing delegates only selected extensions and passes through Cod
     fakeCodex.emitMessage({ id, ...response });
     assert.deepEqual(await waitForMessage(relayMessages, (message) => message.id === id), { id, ...expected });
   };
+
+  const versions = (await request("desktop/bridge/versions")).result;
+  assert.equal(versions.bridgeVersion, require("../package.json").version);
+  assert.equal(versions.relayVersion, "4.0.1");
+  assert.equal(versions.relayCanInstallRelease, false);
 
   await upstreamRequest("project/list", { limit: 2 }, { result: { data: [] } });
   await upstreamRequest("thread/list", { limit: 2 }, {

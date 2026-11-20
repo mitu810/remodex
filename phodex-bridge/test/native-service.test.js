@@ -397,3 +397,93 @@ test('management operations cannot interleave service configuration and QR write
   const service = createNativeBridgeService({ platform: 'linux', env, backend: { install: () => assert.fail('must not change service during another lifecycle operation') } });
   await assert.rejects(service.start(), /already|progress/);
 });
+
+test('combined updates only target the active Relay registered in the same server kit', (t) => {
+  const { readCoInstalledRelayService } = require('../scripts/update-remodex-bridge.cjs');
+  const { root } = fixture(t);
+  const bridge = path.join(root, 'phodex-bridge');
+  const relay = path.join(root, 'relay');
+  fs.mkdirSync(bridge);
+  fs.mkdirSync(relay);
+  fs.writeFileSync(path.join(relay, 'server.js'), '');
+  fs.writeFileSync(path.join(relay, 'package.json'), JSON.stringify({ name: 'remodex-relay', version: '4.0.8' }));
+
+  const read = (entry, state) => readCoInstalledRelayService(bridge, {
+    platform: 'linux',
+    run(file, args) {
+      assert.equal(file, 'systemctl');
+      assert.equal(args[0], '--user');
+      assert.equal(args[2], 'remodex-relay.service');
+      return args[1] === 'cat' ? `ExecStart="${process.execPath}" "${entry}"` : state;
+    },
+  });
+  assert.equal(read(path.join(relay, 'server.js'), 'active')?.version, '4.0.8');
+  assert.equal(read(path.join(relay, 'server.js'), 'inactive'), null);
+  assert.equal(read(path.join(bridge, 'server.js'), 'active'), null);
+});
+
+for (const failComponent of [null, 'relay', 'bridge']) {
+  test(`combined release ${failComponent ? `rolls both components back when ${failComponent} fails` : 'updates both components in dependency order'}`, async (t) => {
+    const { updateBridge } = require('../scripts/update-remodex-bridge.cjs');
+    const { root } = fixture(t);
+    const archive = path.join(root, 'verified.zip');
+    fs.writeFileSync(archive, 'fixture archive');
+    fs.writeFileSync(path.join(root, 'setup-server.cjs'), '');
+    const events = [];
+
+    function writeComponent(base, name, version) {
+      const dir = path.join(base, name);
+      fs.mkdirSync(path.join(dir, 'node_modules'), { recursive: true });
+      fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ version }));
+      fs.writeFileSync(path.join(dir, 'package-lock.json'), JSON.stringify({ version }));
+      if (name === 'phodex-bridge') {
+        fs.mkdirSync(path.join(dir, 'src'));
+        fs.writeFileSync(path.join(dir, 'src', 'service-entry.js'), '');
+      }
+      return dir;
+    }
+
+    const bridgeRoot = writeComponent(root, 'phodex-bridge', '4.0.8');
+    const relayRoot = writeComponent(root, 'relay', '4.0.8');
+    fs.writeFileSync(path.join(relayRoot, '.env'), 'PORT=9000');
+
+    function service(component, directory) {
+      let status = 'active';
+      return {
+        root: directory,
+        nodePath: process.execPath,
+        state: () => status,
+        stop() { events.push(`stop ${component}`); status = 'inactive'; },
+        start() {
+          const { version } = JSON.parse(fs.readFileSync(path.join(directory, 'package.json'), 'utf8'));
+          events.push(`start ${component} ${version}`);
+          status = failComponent === component && version === '4.0.9' ? 'failed' : 'active';
+        },
+      };
+    }
+    const result = updateBridge({ ...service('bridge', bridgeRoot), entryPath: path.join(bridgeRoot, 'src', 'service-entry.js') }, archive, {
+      includeRelay: true, relayService: service('relay', relayRoot), expectedVersion: '4.0.9',
+      platform: 'linux', pause: async () => {}, log() {},
+      run(file, args) {
+        if (file === process.execPath) {
+          assert.equal(args[0], '-e'); // A version-only change should reuse installed dependencies.
+          return;
+        }
+        const stage = path.join(args.at(-1), 'release');
+        writeComponent(stage, 'phodex-bridge', '4.0.9');
+        writeComponent(stage, 'relay', '4.0.9');
+      },
+    });
+    if (failComponent) {
+      await assert.rejects(result, /previous installation was preserved or restored/);
+      assert.deepEqual(events.slice(-2), ['start relay 4.0.8', 'start bridge 4.0.8']);
+    } else {
+      await result;
+      assert.deepEqual(events, ['stop bridge', 'stop relay', 'start relay 4.0.9', 'start bridge 4.0.9']);
+    }
+    for (const dir of [bridgeRoot, relayRoot]) {
+      assert.equal(JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8')).version, failComponent ? '4.0.8' : '4.0.9');
+    }
+    assert.equal(fs.readFileSync(path.join(relayRoot, '.env'), 'utf8'), 'PORT=9000');
+  });
+}

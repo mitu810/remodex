@@ -63,7 +63,7 @@ async function acquireServiceLock({ env = process.env, processImpl = process, fs
 
 function runBridgeService({
   env = process.env, processImpl = process, startBridgeImpl, useLock = true,
-  scheduleBridgeUpdate, onStatus, missingConfigMessage = 'No relay URL configured for the bridge service.',
+  scheduleBridgeUpdate, readManagedRelay, onStatus, missingConfigMessage = 'No relay URL configured for the bridge service.',
 } = {}) {
   const config = readDaemonConfig({ env });
   if (!config?.relayUrl) {
@@ -93,7 +93,7 @@ function runBridgeService({
     processImpl.once('exit', dispose);
     try {
       const bridge = (startBridgeImpl || require('./bridge').startBridge)({
-        config, printPairingQr: false, scheduleBridgeUpdate,
+        config, printPairingQr: false, scheduleBridgeUpdate, readManagedRelay,
         onPairingSession(pairing) { writePairingSession(pairing, { env }); },
         onBridgeStatus(status) {
           writeBridgeStatus(mergeBridgeStatusForDaemon(status, readBridgeStatus({ env })), { env });

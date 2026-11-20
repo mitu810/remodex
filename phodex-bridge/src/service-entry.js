@@ -22,7 +22,7 @@ function restoreServiceEnvironment(stateDir, processImpl) {
 }
 
 async function runServiceEntry({
-  stateDir = process.argv[2], processImpl = process, scheduleBridgeUpdate, onStatus,
+  stateDir = process.argv[2], processImpl = process, scheduleBridgeUpdate, readManagedRelay, onStatus,
 } = {}) {
   if (!restoreServiceEnvironment(stateDir, processImpl)) return null;
   const logs = path.join(stateDir, 'logs');
@@ -39,18 +39,20 @@ async function runServiceEntry({
     };
   }
   return await require('./service-runner').runBridgeService({
-    env: processImpl.env, processImpl, scheduleBridgeUpdate, onStatus,
+    env: processImpl.env, processImpl, scheduleBridgeUpdate, readManagedRelay, onStatus,
   });
 }
 
 async function runWorker(stateDir) {
-  const { supportsBridgeReleaseArchive } = require('./bridge-release');
+  const { readLocalRelayUpdateService, supportsBridgeReleaseArchive } = require('./bridge-release');
   let pending;
+  let relayUpdatesSupported = false;
   let ready = false;
   let stopping = false;
   const runner = runServiceEntry({
     stateDir,
     scheduleBridgeUpdate: supportsBridgeReleaseArchive() ? requestUpdate : undefined,
+    readManagedRelay: () => relayUpdatesSupported ? readLocalRelayUpdateService() : null,
     onStatus(status) {
       const connected = status?.state === 'running' && status.connectionStatus === 'connected';
       if (connected === ready) return;
@@ -59,13 +61,13 @@ async function runWorker(stateDir) {
     },
   });
 
-  function requestUpdate() {
+  function requestUpdate({ includeRelay = false } = {}) {
     if (pending || !process.connected || stopping) {
       throw new Error('The bridge supervisor is busy or is no longer connected.');
     }
     return new Promise((resolve, reject) => {
       pending = { resolve, reject };
-      process.send({ kind: 'update' }, (error) => {
+      process.send({ kind: 'update', includeRelay }, (error) => {
         if (!error) return;
         pending = null;
         reject(error);
@@ -89,6 +91,7 @@ async function runWorker(stateDir) {
 
   process.on('message', (message) => {
     if (message?.kind === 'stop') void stop();
+    if (message?.kind === 'updateCapabilities') relayUpdatesSupported = message.includeRelay === true;
     if (message?.kind !== 'updateResult' || !pending) return;
     const reply = pending;
     pending = null;

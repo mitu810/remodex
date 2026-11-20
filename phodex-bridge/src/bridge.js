@@ -47,10 +47,11 @@ const { handlePetRequest } = require("./pet-handler");
 const { createNotificationsHandler } = require("./notifications-handler");
 const { createVoiceHandler, resolveVoiceAuth } = require("./voice-handler");
 const {
+  bridgeHostMetadata,
   composeSanitizedAuthStatusFromSettledResults,
 } = require("./account-status");
 const { createBridgePackageVersionStatusReader } = require("./package-version-status");
-const { scheduleInstalledBridgeUpdate } = require("./bridge-release");
+const { readLocalRelayUpdateService, scheduleInstalledBridgeUpdate } = require("./bridge-release");
 const { createPushNotificationServiceClient } = require("./push-notification-service-client");
 const { createPushNotificationTracker } = require("./push-notification-tracker");
 const { resolveCodexGeneratedImagesRoot } = require("./codex-home");
@@ -777,6 +778,7 @@ function startBridgeSession({
   onPairingSession = null,
   onBridgeStatus = null,
   scheduleBridgeUpdate,
+  readManagedRelay = readLocalRelayUpdateService,
 }, { relaySessionId, scheduleRestart, requestExit, desktopRestartFailed = false }) {
   const config = explicitConfig || readBridgeConfig();
   const catalogDeletionScope = config.codexEndpoint ? null : randomBytes(16).toString("hex");
@@ -852,6 +854,7 @@ function startBridgeSession({
 
   // Keep the local Codex runtime alive across transient relay disconnects.
   let socket = null;
+  let relayVersion = null;
   let pairingSession = null;
   let isShuttingDown = false;
   let reconnectAttempt = 0;
@@ -1263,6 +1266,12 @@ function startBridgeSession({
       },
     });
     socket = nextSocket;
+    relayVersion = null;
+    nextSocket.on("upgrade", (response) => {
+      if (socket === nextSocket) {
+        relayVersion = componentVersion(response.headers["x-remodex-relay-version"]);
+      }
+    });
 
     nextSocket.on("open", () => {
       if (isShuttingDown) return;
@@ -1505,6 +1514,7 @@ function startBridgeSession({
       appPath: config.codexAppPath,
       readBridgePreferences,
       updateBridgePreferences,
+      readPackageVersions,
       updateBridgePackageAndRestart,
       withThreadHandoff: desktopIpcLiveOwner ? (threadId, openThread) => {
         if (pendingLocalResumeThreadIds.has(threadId)) {
@@ -2798,19 +2808,34 @@ function startBridgeSession({
   }
 
   let bridgeUpdatePending = false;
-  async function updateBridgePackageAndRestart() {
+  async function readPackageVersions() {
+    const bridge = await readBridgePackageVersionStatus();
+    const localRelay = bridge.bridgeCanInstallRelease ? readManagedRelay() : null;
+    return {
+      ...bridge,
+      ...bridgeHostMetadata(process.platform, codex.mode, bridge.bridgeCanInstallRelease),
+      relayVersion,
+      managedRelayVersion: componentVersion(localRelay?.version),
+      relayCanInstallRelease: Boolean(localRelay),
+    };
+  }
+
+  async function updateBridgePackageAndRestart({ includeRelay = false } = {}) {
     if (bridgeUpdatePending) {
       throw Object.assign(new Error("A bridge update is already scheduled."), { errorCode: "bridge_update_in_progress" });
     }
     bridgeUpdatePending = true;
     try {
+      if (includeRelay && !readManagedRelay()) {
+        throw new Error("No active Relay from this server kit is managed by this user.");
+      }
       const version = scheduleBridgeUpdate
-        ? await scheduleBridgeUpdate()
-        : await scheduleInstalledBridgeUpdate({ logsDir: resolveBridgeLogsDir() });
+        ? await scheduleBridgeUpdate({ includeRelay })
+        : await scheduleInstalledBridgeUpdate({ logsDir: resolveBridgeLogsDir(), includeRelay });
       // Keep an installation in flight while its independent worker takes over.
       const reset = setTimeout(() => { bridgeUpdatePending = false; }, 5 * 60_000);
       reset.unref();
-      return { success: true, version, restartScheduled: true };
+      return { success: true, version, restartScheduled: true, ...(includeRelay ? { relayVersion: version } : {}) };
     } catch (error) {
       bridgeUpdatePending = false;
       const message = truncateCommandOutput(error?.stderr || error?.message) || "Could not schedule the bridge update.";
@@ -2825,6 +2850,10 @@ function startBridgeSession({
     relaySessionId: sessionId,
     stop: stopBridge,
   };
+}
+
+function componentVersion(value) {
+  return typeof value === "string" && /^\d{1,6}\.\d{1,6}\.\d{1,6}$/.test(value) ? value : null;
 }
 
 // Holds a single macOS idle-sleep assertion for as long as the bridge process stays alive.

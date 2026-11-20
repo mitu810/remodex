@@ -616,12 +616,13 @@ test("desktop/bridge/updateAndRestart forwards bridge package updates", async ()
   handleDesktopRequest(JSON.stringify({
     id: "request-7",
     method: "desktop/bridge/updateAndRestart",
-    params: {},
+    params: { includeRelay: true },
   }), (response) => {
     responses.push(JSON.parse(response));
   }, {
     platform: "darwin",
-    async updateBridgePackageAndRestart() {
+    async updateBridgePackageAndRestart(options) {
+      assert.deepEqual(options, { includeRelay: true });
       didUpdate = true;
       return {
         success: true,
