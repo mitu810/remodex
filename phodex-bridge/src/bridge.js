@@ -816,6 +816,7 @@ function startBridgeSession({
   });
   logIOSAppCompatibilityWarning(cachedIOSAppCompatibilityWarning);
   const sessionId = relaySessionId ?? relaySession.sessionId;
+  deviceState = { ...deviceState, relaySessionId: sessionId };
   const relaySessionUrl = `${relayBaseUrl}/${sessionId}`;
   const notificationSecret = randomBytes(24).toString("hex");
   const desktopRefresher = new CodexDesktopRefresher({

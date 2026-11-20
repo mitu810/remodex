@@ -878,10 +878,10 @@ test("relay keeps the iPhone connected briefly but rejects new sends while the m
   });
 });
 
-test("relay lets the iPhone reconnect during the mac absence grace window", async () => {
+test("relay lets the iPhone reconnect within the grace window when the same bridge returns", async () => {
   await withServer(async ({ port }) => {
     const mac = new WebSocket(`ws://127.0.0.1:${port}/relay/session-grace-rejoin`, {
-      headers: { "x-role": "mac" },
+      headers: { "x-role": "mac", "x-notification-secret": "same-bridge" },
     });
     const iphone = new WebSocket(`ws://127.0.0.1:${port}/relay/session-grace-rejoin`, {
       headers: { "x-role": "iphone" },
@@ -903,7 +903,7 @@ test("relay lets the iPhone reconnect during the mac absence grace window", asyn
     await onceOpen(rejoinedIphone);
 
     const reconnectedMac = new WebSocket(`ws://127.0.0.1:${port}/relay/session-grace-rejoin`, {
-      headers: { "x-role": "mac" },
+      headers: { "x-role": "mac", "x-notification-secret": "same-bridge" },
     });
     await onceOpen(reconnectedMac);
 
@@ -921,6 +921,34 @@ test("relay lets the iPhone reconnect during the mac absence grace window", asyn
     relayOptions: {
       macAbsenceGraceMs: 250,
     },
+  });
+});
+
+test("relay closes stale mobile sockets when a restarted bridge rejoins the same room", async () => {
+  await withServer(async ({ port }) => {
+    const url = `ws://127.0.0.1:${port}/relay/session-bridge-restart`;
+    const bridge = new WebSocket(url, { headers: { "x-role": "mac", "x-notification-secret": "old-bridge" } });
+    const phone = new WebSocket(url, { headers: { "x-role": "iphone" } });
+    await Promise.all([onceOpen(bridge), onceOpen(phone)]);
+
+    const bridgeClosed = onceClosed(bridge);
+    bridge.close();
+    await bridgeClosed;
+
+    const staleClosed = onceCloseDetails(phone);
+    const restarted = new WebSocket(url, { headers: { "x-role": "mac", "x-notification-secret": "new-bridge" } });
+    await onceOpen(restarted);
+    assert.deepEqual(await staleClosed, { code: 4002, reason: "Bridge restarted" });
+
+    const reconnected = new WebSocket(url, { headers: { "x-role": "iphone" } });
+    await onceOpen(reconnected);
+    const received = onceMessage(restarted);
+    reconnected.send("new handshake");
+    assert.equal(await received, "new handshake");
+    const closed = [onceClosed(reconnected), onceClosed(restarted)];
+    reconnected.close();
+    restarted.close();
+    await Promise.all(closed);
   });
 });
 

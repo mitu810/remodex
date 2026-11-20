@@ -22,18 +22,11 @@ const {
 
 // ─── Relay Session Resolution ───────────────────────────────
 
-test("resolveBridgeRelaySession always creates a fresh relay session", () => {
-  const state = makeDeviceState({
-    trustedPhones: {
-      "phone-1": "phone-public-key-1",
-    },
-  });
-
-  const resolved = resolveBridgeRelaySession(state, { persist: false });
-
-  assert.equal(resolved.isPersistent, false);
-  assert.ok(resolved.sessionId);
-  assert.deepEqual(resolved.deviceState, state);
+test("unpaired launches do not revive expired QR invitations", () => {
+  const first = resolveBridgeRelaySession(makeDeviceState(), { persist: false });
+  const second = resolveBridgeRelaySession(first.deviceState, { persist: false });
+  assert.notEqual(first.sessionId, second.sessionId);
+  assert.equal(second.isPersistent, false);
 });
 
 test("rememberTrustedPhone stores the trusted phone identity", () => {
@@ -191,7 +184,7 @@ test("loadOrCreateBridgeDeviceState throws when the canonical file is corrupted 
   });
 });
 
-test("resolveBridgeRelaySession does not persist the fresh launch session id", () => {
+test("paired relay sessions stay the same across reloads until reset", () => {
   withTempDeviceStateEnv(() => {
     const trustedState = rememberTrustedPhone(
       makeDeviceState(),
@@ -203,11 +196,23 @@ test("resolveBridgeRelaySession does not persist the fresh launch session id", (
     const resolved = resolveBridgeRelaySession(trustedState);
     const reloaded = loadOrCreateBridgeDeviceState();
 
-    assert.equal(resolved.isPersistent, false);
+    assert.equal(resolved.isPersistent, true);
+    assert.equal(resolveBridgeRelaySession(reloaded).sessionId, resolved.sessionId);
     assert.equal(reloaded.macDeviceId, trustedState.macDeviceId);
     assert.deepEqual(reloaded.trustedPhones, {
       "phone-5": "phone-public-key-5",
     });
+    resetBridgeTrustState();
+    assert.notEqual(resolveBridgeRelaySession(loadOrCreateBridgeDeviceState()).sessionId, resolved.sessionId);
+  });
+});
+
+test("claiming a QR invitation saves the relay session that the phone just paired with", () => {
+  withTempDeviceStateEnv(() => {
+    const invitation = resolveBridgeRelaySession(loadOrCreateBridgeDeviceState());
+    rememberTrustedPhone(invitation.deviceState, "phone-1", "phone-public-key-1");
+
+    assert.equal(resolveBridgeRelaySession(loadOrCreateBridgeDeviceState()).sessionId, invitation.sessionId);
   });
 });
 

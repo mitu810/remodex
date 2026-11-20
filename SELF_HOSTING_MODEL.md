@@ -28,6 +28,6 @@ Authenticate Codex on the same computer and as the same user that runs the bridg
 
 Set `REMODEX_RELAY` to an address reachable by both the host and phone. For public access, use a stable WSS hostname and keep the relay behind a TLS proxy on the same computer. A DDNS update can move the hostname to a new IP without changing the pairing URL. Keep real hostnames, pairing files, identity keys, and notification credentials private. See the [WSS setup](Docs/self-hosting.md#public-access-with-wss).
 
-`remodex uninstall-service` removes service registration while preserving local configuration and trust. `remodex reset-pairing` stops the bridge before clearing trusted phones. It preserves the computer’s identity key.
+After the phone pairs, normal bridge restarts and updates reuse the saved pairing. To replace the paired phone, run `remodex reset-pairing`, then run `remodex up` and scan the new QR code. Reset clears phone trust and the saved relay session while preserving the computer’s identity key. `remodex uninstall-service` removes service registration while preserving local configuration and trust.
 
 See [Docs/self-hosting.md](Docs/self-hosting.md) for native setup. Automated checks cover runtime and service contracts; real Windows/Linux phone pairing, reboot and reconnect checks are still required before declaring those environments fully validated.

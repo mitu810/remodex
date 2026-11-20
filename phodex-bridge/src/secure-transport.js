@@ -19,6 +19,7 @@ const {
 } = require("crypto");
 const {
   getTrustedPhonePublicKey,
+  hasTrustedPhones,
   rememberTrustedPhone,
 } = require("./secure-device-state");
 
@@ -178,6 +179,14 @@ function createBridgeSecureTransport({
     }
 
     const trustedPhonePublicKey = getTrustedPhonePublicKey(currentDeviceState, phoneDeviceId);
+    if (handshakeMode === HANDSHAKE_MODE_QR_BOOTSTRAP && hasTrustedPhones(currentDeviceState)
+      && trustedPhonePublicKey !== phoneIdentityPublicKey) {
+      sendControlMessage(createSecureError({
+        code: "phone_replacement_required",
+        message: "A phone is already paired. Run `remodex reset-pairing` on the host before pairing another phone.",
+      }));
+      return;
+    }
     if (handshakeMode === HANDSHAKE_MODE_TRUSTED_RECONNECT) {
       if (!trustedPhonePublicKey) {
         sendControlMessage(createSecureError({

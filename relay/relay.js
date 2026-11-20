@@ -139,7 +139,13 @@ function setupRelay(
       clearMacAbsenceTimer(session, { clearTimeoutFn });
       // The relay keeps a per-session push secret so first-time device registration
       // cannot be claimed by someone who only knows the session id.
-      session.notificationSecret = readHeaderString(req.headers["x-notification-secret"]);
+      const notificationSecret = readHeaderString(req.headers["x-notification-secret"]);
+      if (session.notificationSecret && notificationSecret
+          && session.notificationSecret !== notificationSecret) {
+        // A restarted bridge keeps the relay room but loses its mobile encryption keys.
+        closeSessionClients(session, CLOSE_CODE_SESSION_UNAVAILABLE, "Bridge restarted");
+      }
+      session.notificationSecret = notificationSecret;
       session.macRegistration = readMacRegistrationHeaders(req.headers, sessionId);
       if (session.mac && session.mac.readyState === WebSocket.OPEN) {
         session.mac.close(4001, "Replaced by new Mac connection");

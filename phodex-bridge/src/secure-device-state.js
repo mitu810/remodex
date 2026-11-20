@@ -93,6 +93,7 @@ function resetBridgeTrustState({ env = process.env } = {}) {
   const nextState = normalizeBridgeDeviceState({
     ...existingState,
     trustedPhones: {},
+    relaySessionId: null,
   });
   const clearedTrustedPhones = Object.keys(existingState.trustedPhones || {}).length > 0;
   writeBridgeDeviceState(nextState, { env });
@@ -103,12 +104,18 @@ function resetBridgeTrustState({ env = process.env } = {}) {
   };
 }
 
-// Generates a fresh relay session for every bridge launch so QR pairing stays explicit per-run.
+// Reuse a paired relay session across restarts. An unclaimed QR invitation is
+// launch-scoped so a restart cannot make an old invitation usable again.
 function resolveBridgeRelaySession(state, { persist = true } = {}) {
+  const paired = hasTrustedPhones(state);
+  const saved = paired && normalizeRelaySessionId(state.relaySessionId);
+  const sessionId = saved || randomUUID();
+  const deviceState = saved ? state : { ...state, relaySessionId: sessionId };
+  if (persist && paired && !saved) writeBridgeDeviceState(deviceState);
   return {
-    deviceState: state,
-    isPersistent: false,
-    sessionId: randomUUID(),
+    deviceState,
+    isPersistent: paired && Boolean(saved || persist),
+    sessionId,
   };
 }
 
@@ -417,9 +424,14 @@ function normalizeBridgeDeviceState(rawState) {
     macIdentityPublicKey,
     macIdentityPrivateKey,
     trustedPhones,
+    ...(normalizeRelaySessionId(rawState?.relaySessionId) && { relaySessionId: rawState.relaySessionId }),
     lastSeenDeviceKind,
     lastSeenPhoneAppVersion,
   };
+}
+
+function normalizeRelaySessionId(value) {
+  return typeof value === "string" && /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(value) ? value : null;
 }
 
 function normalizeDeviceKind(value) {
@@ -479,6 +491,7 @@ function base64UrlToBase64(value) {
 
 module.exports = {
   getTrustedPhonePublicKey,
+  hasTrustedPhones,
   loadOrCreateBridgeDeviceState,
   readBridgeDeviceState,
   rememberLastSeenClientDeviceKind,

@@ -261,7 +261,7 @@ test("secure transport round-trips encrypted payloads after a trusted reconnect 
   ]);
 });
 
-test("qr bootstrap allows a fresh QR scan to replace the trusted iPhone", () => {
+test("a saved session's QR cannot replace the trusted iPhone", () => {
   const macIdentity = createOkpKeyPair("ed25519");
   const firstPhoneIdentity = createOkpKeyPair("ed25519");
   const firstPhoneEphemeral = createOkpKeyPair("x25519");
@@ -290,17 +290,17 @@ test("qr bootstrap allows a fresh QR scan to replace the trusted iPhone", () => 
     lastAppliedBridgeOutboundSeq: 0,
   });
 
-  finishHandshake({
-    secureTransport,
-    sessionId: "session-3",
-    macDeviceId: "mac-3",
-    phoneDeviceId: "phone-3b",
-    macIdentity,
-    phoneIdentity: secondPhoneIdentity,
-    phoneEphemeral: secondPhoneEphemeral,
-    handshakeMode: HANDSHAKE_MODE_QR_BOOTSTRAP,
-    lastAppliedBridgeOutboundSeq: 0,
-  });
+  for (const phoneDeviceId of ["phone-3b", "phone-3a"]) {
+    const replies = [];
+    secureTransport.handleIncomingWireMessage(JSON.stringify({
+      kind: "clientHello", protocolVersion: SECURE_PROTOCOL_VERSION, sessionId: "session-3",
+      phoneDeviceId, handshakeMode: HANDSHAKE_MODE_QR_BOOTSTRAP,
+      phoneIdentityPublicKey: secondPhoneIdentity.publicKey,
+      phoneEphemeralPublicKey: secondPhoneEphemeral.publicKey, clientNonce: Buffer.alloc(32).toString("base64"),
+    }), { sendControlMessage: (message) => replies.push(message) });
+    assert.equal(replies[0].code, "phone_replacement_required");
+    assert.equal(secureTransport.isSecureChannelReady(), true);
+  }
 });
 
 test("expired and malformed pairing attempts leave the trusted session usable", (t) => {
@@ -341,7 +341,7 @@ test("expired and malformed pairing attempts leave the trusted session usable", 
   now = originalPairing.expiresAt - 1;
   finishHandshake({
     ...handshake,
-    phoneDeviceId: "replacement-phone",
+    phoneDeviceId,
     handshakeMode: HANDSHAKE_MODE_QR_BOOTSTRAP,
     beforeAuth() {
       secureTransport.createPairingPayload();
@@ -353,7 +353,7 @@ test("expired and malformed pairing attempts leave the trusted session usable", 
 
   finishHandshake({
     ...handshake,
-    phoneDeviceId: "replacement-phone",
+    phoneDeviceId,
     phoneEphemeral: { publicKey: Buffer.alloc(32).toString("base64") },
     handshakeMode: HANDSHAKE_MODE_QR_BOOTSTRAP,
     expectedAuthError: "invalid_phone_ephemeral_key",

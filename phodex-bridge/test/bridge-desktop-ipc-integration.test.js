@@ -1349,7 +1349,7 @@ test("endpoint routing delegates only selected extensions and passes through Cod
     },
   });
   assert.equal((await request("project/validatePath")).error?.data?.errorCode, "missing_path");
-  assert.equal((await request("workspace/readFile")).error?.data?.errorCode, "missing_file_path");
+  assert.equal((await request("workspace/readFile")).error?.data?.errorCode, "missing_chat_file_scope");
   fakeCodex.emitMessage({ id: "untracked-image", result: { dataBase64: "a".repeat(12 * 1024 * 1024) } });
   const oversized = await waitForMessage(relayMessages, (message) => message.id === "untracked-image");
   assert.equal(oversized.error?.data?.errorCode, "relay_response_too_large");
