@@ -303,6 +303,30 @@ test("a saved session's QR cannot replace the trusted iPhone", () => {
   }
 });
 
+test("the previously trusted phone can scan a fresh QR after Bridge restarts", () => {
+  const macIdentity = createOkpKeyPair("ed25519");
+  const phoneIdentity = createOkpKeyPair("ed25519");
+  const sessionId = "paired-session";
+  let deviceState = {
+    macDeviceId: "host", macIdentityPrivateKey: macIdentity.privateKey,
+    macIdentityPublicKey: macIdentity.publicKey, trustedPhones: {},
+  };
+  for (let launch = 0; launch < 2; launch += 1) {
+    const secureTransport = createTestBridgeSecureTransport({
+      sessionId, relayUrl: "wss://relay.example/relay", deviceState,
+      onTrustedPhoneUpdate(state) { deviceState = state; },
+    });
+    secureTransport.createPairingPayload();
+    finishHandshake({
+      secureTransport, sessionId, macDeviceId: "host", phoneDeviceId: "phone",
+      macIdentity, phoneIdentity, phoneEphemeral: createOkpKeyPair("x25519"),
+      handshakeMode: HANDSHAKE_MODE_QR_BOOTSTRAP, lastAppliedBridgeOutboundSeq: 0,
+    });
+    assert.equal(secureTransport.isSecureChannelReady(), true);
+    assert.equal(deviceState.trustedPhones.phone, phoneIdentity.publicKey);
+  }
+});
+
 test("expired and malformed pairing attempts leave the trusted session usable", (t) => {
   let now = Date.now();
   t.mock.method(Date, "now", () => now);

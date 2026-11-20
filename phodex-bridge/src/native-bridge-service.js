@@ -67,8 +67,8 @@ function createNativeBridgeService({
       while (now() < deadline) {
         const status = state.readBridgeStatus(options);
         if (status?.state === 'error' && status.lastError) throw new Error(status.lastError);
-        const candidate = state.readPairingSession(options);
-        if (candidate?.pairingPayload && Date.parse(candidate.createdAt) >= startedAt && candidate.pairingPayload.expiresAt > now()) { pairingSession = candidate; break; }
+        pairingSession = state.readLivePairingSession({ ...options, startedAt, now });
+        if (pairingSession) break;
         await sleep(200);
       }
       if (!pairingSession) throw new Error('The bridge did not publish a fresh pairing QR. Run `remodex status` and inspect the service logs.');
@@ -117,6 +117,10 @@ function createNativeBridgeService({
     try { return await operation(); } finally { await ownership.release(); }
   }
 
+  function readPairingSession() {
+    return backend.status().running ? state.readLivePairingSession({ ...options, now }) : null;
+  }
+
   return {
     start: (options) => managed(() => start(options)),
     stop: () => managed(stop), status,
@@ -127,10 +131,11 @@ function createNativeBridgeService({
       const installed = fsImpl.existsSync(manifestPath) ? JSON.parse(fsImpl.readFileSync(manifestPath, 'utf8')).environment : {};
       return require('./secure-device-state').resetBridgeTrustState({ env: { ...env, REMODEX_DEVICE_STATE_FILE: installed?.REMODEX_DEVICE_STATE_FILE || env.REMODEX_DEVICE_STATE_FILE } });
     }),
-    printPairingQr({ pairingSession } = {}) {
-      pairingSession ||= state.readPairingSession(options);
-      if (!pairingSession?.pairingPayload || pairingSession.pairingPayload.expiresAt <= now()) throw new Error('No live pairing QR is available. Run `remodex up`.');
-      printQR(pairingSession);
+    readPairingSession,
+    printPairingQr({ pairingSession, includeCopyableCode = false } = {}) {
+      pairingSession ||= readPairingSession();
+      if (!pairingSession?.pairingPayload || pairingSession.pairingPayload.expiresAt <= now()) throw new Error('No live pairing QR is available. Run `remodex qr --refresh` for a new invitation.');
+      printQR(pairingSession, { includeCopyableCode });
     },
     printStatus() {
       const current = status();

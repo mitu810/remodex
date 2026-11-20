@@ -856,6 +856,7 @@ function startBridgeSession({
   let socket = null;
   let relayVersion = null;
   let pairingSession = null;
+  let pairingPublished = false;
   let isShuttingDown = false;
   let reconnectAttempt = 0;
   let reconnectTimer = null;
@@ -1117,7 +1118,7 @@ function startBridgeSession({
     codexLaunchState = "connected";
     const lastPublishedBridgeStatus = bridgeStatusPublisher.latest();
     if (lastPublishedBridgeStatus) publishBridgeStatus(lastPublishedBridgeStatus);
-    if (initializeEndpoint) beginPairingAndConnectRelay();
+    if (initializeEndpoint) connectRelay();
   });
 
   function clearReconnectTimer() {
@@ -1251,6 +1252,12 @@ function startBridgeSession({
       return;
     }
 
+    if (!pairingSession || (!pairingPublished && pairingSession.pairingPayload.expiresAt <= Date.now())) {
+      pairingSession = {
+        pairingPayload: secureTransport.createPairingPayload(),
+        pairingCode: createShortPairingCode({ length: SHORT_PAIRING_CODE_LENGTH }),
+      };
+    }
     logConnectionStatus("connecting");
     const nextSocket = new WebSocket(relaySessionUrl, {
       perMessageDeflate: {
@@ -1274,14 +1281,19 @@ function startBridgeSession({
     });
 
     nextSocket.on("open", () => {
-      if (isShuttingDown) return;
+      if (isShuttingDown || socket !== nextSocket) return;
       markRelayActivity();
       clearReconnectTimer();
       reconnectAttempt = 0;
       startRelayWatchdog(nextSocket);
-      logConnectionStatus("connected");
       secureTransport.bindLiveSendWireMessage(sendRelayWireMessage);
       sendRelayRegistrationUpdate(deviceState);
+      if (!pairingPublished) {
+        pairingPublished = true;
+        onPairingSession?.(pairingSession);
+        if (printPairingQr) printQR(pairingSession);
+      }
+      logConnectionStatus("connected");
     });
 
     nextSocket.on("message", (data) => {
@@ -1332,18 +1344,8 @@ function startBridgeSession({
     });
   }
 
-  function beginPairingAndConnectRelay() {
-    pairingSession = {
-      pairingPayload: secureTransport.createPairingPayload(),
-      pairingCode: createShortPairingCode({ length: SHORT_PAIRING_CODE_LENGTH }),
-    };
-    onPairingSession?.(pairingSession);
-    if (printPairingQr) printQR(pairingSession);
-    connectRelay();
-  }
-
   pushServiceClient.logUnavailable();
-  if (!initializeEndpoint) beginPairingAndConnectRelay();
+  if (!initializeEndpoint) connectRelay();
 
   codex.onMessage((message) => {
     // Streaming deltas make this the hottest path in the bridge: parse the

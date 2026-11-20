@@ -67,6 +67,18 @@ test("printQR refuses to print raw pairing JSON even for debug workflows", () =>
   assert.doesNotMatch(output, /ws:\/\/127\.0\.0\.1:9000\/relay/);
 });
 
+test("the opt-in RMX1 paste code includes the self-hosted relay and matches the QR payload", () => {
+  const pairingPayload = {
+    v: 2, relay: "wss://relay.example/relay", sessionId: "fixture-session",
+    macDeviceId: "fixture-device", macIdentityPublicKey: "fixture-key", expiresAt: 1_900_000_000_000,
+  };
+  const logs = captureConsoleLog(() => printQR({ pairingPayload, pairingCode: "ABCDEFGHJK" }, { includeCopyableCode: true }));
+  const token = logs.find((line) => line.startsWith("RMX1:"));
+  assert.ok(token);
+  assert.deepEqual(JSON.parse(Buffer.from(token.slice(5), "base64url").toString("utf8")), pairingPayload);
+  assert.ok(logs.includes("ABCDEFGHJK"));
+});
+
 test("shouldPrintPairingJson accepts explicit flags and debug env aliases", () => {
   assert.equal(shouldPrintPairingJson({ explicitValue: true, env: {} }), true);
   assert.equal(shouldPrintPairingJson({ explicitValue: false, env: { REMODEX_PRINT_PAIRING_JSON: "1" } }), false);

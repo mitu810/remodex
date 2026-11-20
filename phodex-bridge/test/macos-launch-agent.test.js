@@ -365,6 +365,7 @@ test("restartMacOSBridgeService can wait for the daemon to publish a fresh pairi
           },
           pairingCode: "PAIRME",
         }, { env });
+        writeBridgeStatus({ state: "running", connectionStatus: "connected" }, { env });
       },
     });
 
@@ -472,6 +473,7 @@ test("printMacOSBridgePairingQr renders the daemon pairing session", () => {
       },
       pairingCode: "ABC123",
     });
+    writeBridgeStatus({ state: "running", connectionStatus: "connected" });
 
     const logs = [];
     const errors = [];
@@ -480,7 +482,7 @@ test("printMacOSBridgePairingQr renders the daemon pairing session", () => {
     console.log = (message = "") => logs.push(String(message));
     console.error = (message = "") => errors.push(String(message));
     try {
-      printMacOSBridgePairingQr();
+      printMacOSBridgePairingQr({ execFileSyncImpl: () => "pid = 4242" });
     } finally {
       console.log = originalLog;
       console.error = originalError;

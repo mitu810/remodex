@@ -52,6 +52,10 @@ function printQR(pairingSessionOrPayload, options = {}) {
     console.log("Or enter this pairing code in the iPhone app:\n");
     console.log(pairingCode);
   }
+  if (options.includeCopyableCode) {
+    console.log("\nOr paste this full pairing code into the iPhone app. It includes the relay address:\n");
+    console.log(`RMX1:${Buffer.from(payload, "utf8").toString("base64url")}`);
+  }
   console.log(`\nSession ID: ${sessionIdShort || "(none)"}`);
   console.log(`Device ID: ${pairingPayload.macDeviceId}`);
   console.log(`Expires: ${new Date(pairingPayload.expiresAt).toISOString()}\n`);

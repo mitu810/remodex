@@ -44,7 +44,7 @@ node .\setup-server.cjs install bridge
 
 5. 在 iPhone 扫码配对后，运行 `node .\phodex-bridge\bin\remodex.js stop`。回到任务计划程序，打开刚生成的 `Remodex-Bridge-…` 任务。保留 **操作** 和执行账号，按第 2 步设置 **不管用户是否登录都要运行**，将触发器改为 **启动时**。保存后右键 **运行**，手机即可用原配对重连。
 
-日常通过任务计划程序启动或停止两个任务。Windows 上的 `remodex restart`、`remodex qr` 和再次执行 `setup-server.cjs bridge` 会重建 bridge 的任务定义。执行这些命令后，重新应用第 5 步的开机设置。在登录前运行的 bridge 可以自动重启自己管理的 Codex 进程。交互会话中另开的 Codex 桌面应用由该会话管理。
+日常通过任务计划程序启动或停止两个任务。Windows 上的 `remodex restart`、`remodex qr --refresh` 和再次执行 `setup-server.cjs bridge` 会重建 bridge 的任务定义。执行这些命令后，重新应用第 5 步的开机设置。在登录前运行的 bridge 可以自动重启自己管理的 Codex 进程。交互会话中另开的 Codex 桌面应用由该会话管理。
 
 ### Linux
 
@@ -105,6 +105,8 @@ node setup-server.cjs bridge 'wss://mac.example.com/relay'
 - 查看 bridge 状态和日志路径，运行 `node phodex-bridge/bin/remodex.js status`。
 - Windows 通过任务计划程序管理运行状态。Linux 可用 `systemctl --user restart remodex-relay.service remodex-bridge.service` 重启，并用 `journalctl --user -u remodex-relay.service -n 50` 查看 relay 日志。
 - 重启电脑后，在登录前用 iPhone 打开原入口的 `/health`，确认返回 `{"ok":true}`，再从 Remodex 打开已配对的设备。
+
+- 从 4.0.10 起，在安装目录运行 `node phodex-bridge/bin/remodex.js qr` 即可显示当前二维码、短码和完整的 `RMX1:` 配对码，Bridge 会继续运行。如果手机已经忘记这台设备，在「使用配对码」中粘贴整行 `RMX1:`，即可使用正确的 Relay 地址。二维码或配对码过期后，运行 `node phodex-bridge/bin/remodex.js qr --refresh`，Bridge 会重启并等 Relay 连接成功后输出新邀请。
 
 ## 升级已有安装
 

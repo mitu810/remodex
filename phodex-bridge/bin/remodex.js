@@ -7,6 +7,7 @@
 
 const {
   getMacOSBridgeServiceStatus,
+  readMacOSBridgePairingSession,
   printMacOSBridgePairingQr,
   printMacOSBridgeServiceStatus,
   readBridgeConfig,
@@ -27,6 +28,7 @@ const { runBridgeService, runForegroundBridge } = require('../src/service-runner
 
 const defaultDeps = {
   getMacOSBridgeServiceStatus,
+  readMacOSBridgePairingSession,
   printMacOSBridgePairingQr,
   printMacOSBridgeServiceStatus,
   readBridgeConfig,
@@ -73,7 +75,7 @@ async function main({
   exitImpl = process.exit,
   deps = defaultDeps,
 } = {}) {
-  const { command, jsonOutput, watchThreadId } = parseCliArgs(argv.slice(2));
+  const { command, jsonOutput, refreshPairing, watchThreadId } = parseCliArgs(argv.slice(2));
 
   if (isVersionCommand(command)) {
     emitVersion({ jsonOutput, consoleImpl });
@@ -97,6 +99,7 @@ async function main({
       resetPairing: deps.resetMacOSBridgePairing,
       status: deps.getMacOSBridgeServiceStatus,
       printStatus: deps.printMacOSBridgeServiceStatus,
+      readPairingSession: deps.readMacOSBridgePairingSession,
       printPairingQr: deps.printMacOSBridgePairingQr,
     } : deps.nativeService || createNativeBridgeService({ platform });
   }
@@ -159,9 +162,13 @@ async function main({
   }
 
   if (command === "qr" || command === "pair") {
-    const result = await service.start({
-      waitForPairing: true,
-    });
+    if (refreshPairing && !jsonOutput) consoleImpl.log("[remodex] Restarting bridge for a fresh pairing QR...");
+    const result = refreshPairing
+      ? await service.restart({ waitForPairing: true })
+      : { pairingSession: service.readPairingSession() };
+    if (!result.pairingSession) {
+      throw new Error("No live pairing QR is available. Check `remodex status`. To renew an expired invitation, run `remodex qr --refresh`.");
+    }
     if (jsonOutput) {
       emitJson({
         ok: true,
@@ -173,9 +180,9 @@ async function main({
       return;
     }
 
-    consoleImpl.log("[remodex] Refreshing bridge pairing QR...");
     service.printPairingQr({
       pairingSession: result.pairingSession,
+      includeCopyableCode: true,
     });
     return;
   }
@@ -276,7 +283,7 @@ async function main({
 
   consoleImpl.error(`Unknown command: ${command}`);
   consoleImpl.error(
-    "Usage: remodex up | remodex run | remodex start | remodex restart | remodex qr | remodex pair | remodex stop | remodex uninstall-service | remodex status | "
+    "Usage: remodex up | remodex run | remodex start | remodex restart | remodex qr [--refresh] | remodex pair [--refresh] | remodex stop | remodex uninstall-service | remodex status | "
     + "remodex reset-pairing | remodex resume | remodex watch [threadId] | remodex --version | "
     + "append --json to start/restart/qr/pair/stop/uninstall-service/status/reset-pairing/resume for machine-readable output"
   );
@@ -286,10 +293,15 @@ async function main({
 function parseCliArgs(rawArgs) {
   const positionals = [];
   let jsonOutput = false;
+  let refreshPairing = false;
 
   for (const arg of rawArgs) {
     if (arg === "--json") {
       jsonOutput = true;
+      continue;
+    }
+    if (arg === "--refresh") {
+      refreshPairing = true;
       continue;
     }
 
@@ -299,6 +311,7 @@ function parseCliArgs(rawArgs) {
   return {
     command: positionals[0] || "up",
     jsonOutput,
+    refreshPairing,
     watchThreadId: positionals[1] || "",
   };
 }
@@ -364,7 +377,7 @@ function sanitizePairingSessionForOutput(pairingSession) {
   const payload = pairingSession.pairingPayload || {};
   return {
     createdAt: pairingSession.createdAt,
-    pairingCode: pairingSession.pairingCode,
+    hasPairingCode: Boolean(pairingSession.pairingCode),
     pairingPayload: {
       v: payload.v,
       expiresAt: payload.expiresAt,

@@ -19,6 +19,7 @@ const {
   ensureRemodexStateDir,
   readBridgeStatus,
   readDaemonConfig,
+  readLivePairingSession,
   readPairingSession,
   resolveBridgeStderrLogPath,
   resolveBridgeStdoutLogPath,
@@ -337,13 +338,18 @@ function printMacOSBridgeServiceStatus(options = {}) {
   console.log(`[remodex] Stderr log: ${status.stderrLogPath}`);
 }
 
-function printMacOSBridgePairingQr({ pairingSession = null, env = process.env, fsImpl = fs } = {}) {
-  const nextPairingSession = pairingSession || readPairingSession({ env, fsImpl });
-  if (!nextPairingSession?.pairingPayload) {
-    throw new Error("The macOS bridge service did not publish a pairing payload yet.");
+function readMacOSBridgePairingSession({ env = process.env, fsImpl = fs, execFileSyncImpl = execFileSync } = {}) {
+  const launchd = readLaunchAgentState({ env, execFileSyncImpl });
+  return launchd.pid ? readLivePairingSession({ env, fsImpl }) : null;
+}
+
+function printMacOSBridgePairingQr({ pairingSession = null, includeCopyableCode = false, ...options } = {}) {
+  const nextPairingSession = pairingSession || readMacOSBridgePairingSession(options);
+  if (!nextPairingSession?.pairingPayload || nextPairingSession.pairingPayload.expiresAt <= Date.now()) {
+    throw new Error("No live pairing QR is available. Run `remodex qr --refresh` for a new invitation.");
   }
 
-  printQR(nextPairingSession);
+  printQR(nextPairingSession, { includeCopyableCode });
 }
 
 // Persists a launch agent that always runs the Node CLI entrypoint in service mode.
@@ -441,15 +447,8 @@ async function waitForFreshPairingSession({
   const deadline = Date.now() + timeoutMs;
 
   while (Date.now() <= deadline) {
-    const pairingSession = readPairingSession({ env, fsImpl });
-    const createdAt = Date.parse(pairingSession?.createdAt || "");
-    if (
-      pairingSession?.pairingPayload
-      && Number.isFinite(createdAt)
-      && createdAt >= startedAt
-    ) {
-      return pairingSession;
-    }
+    const pairingSession = readLivePairingSession({ env, fsImpl, startedAt });
+    if (pairingSession) return pairingSession;
     await sleep(intervalMs);
   }
 
@@ -651,6 +650,7 @@ module.exports = {
   buildLaunchAgentPlist,
   buildLaunchAgentProgramArguments,
   getMacOSBridgeServiceStatus,
+  readMacOSBridgePairingSession,
   mergeBridgeStatusForDaemon,
   printMacOSBridgePairingQr,
   printMacOSBridgeServiceStatus,

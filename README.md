@@ -249,6 +249,10 @@ remodex --version
 # => 4.0.0
 ```
 
+### `remodex qr`
+
+Prints the running Bridge’s QR and pairing codes without restarting it. Paste the full `RMX1:` code under **Pair with Code** when the phone has forgotten this device or is using a different Relay. If the invitation has expired, `remodex qr --refresh` restarts the Bridge and waits for its Relay connection before printing a fresh one. `remodex pair` does the same as `remodex qr`.
+
 ### `remodex reset-pairing`
 
 Stops the bridge and clears trusted phones while preserving the host’s identity key. The next connection requires QR pairing again.

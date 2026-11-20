@@ -70,6 +70,17 @@ function readPairingSession(options = {}) {
   return readJsonFile(resolvePairingSessionPath(options), options);
 }
 
+function readLivePairingSession({ startedAt = 0, now = Date.now, ...options } = {}) {
+  const pairing = readPairingSession(options);
+  const status = readBridgeStatus(options);
+  const createdAt = Date.parse(pairing?.createdAt);
+  const updatedAt = Date.parse(status?.updatedAt);
+  const currentTime = now();
+  return createdAt >= startedAt && updatedAt >= createdAt && currentTime - updatedAt < 45_000
+    && status?.state === "running" && status.connectionStatus === "connected"
+    && pairing.pairingPayload?.expiresAt > currentTime ? pairing : null;
+}
+
 function clearPairingSession({ fsImpl = fs, ...options } = {}) {
   removeFile(resolvePairingSessionPath(options), fsImpl);
 }
@@ -133,6 +144,7 @@ module.exports = {
   ensureRemodexStateDir,
   readBridgeStatus,
   readDaemonConfig,
+  readLivePairingSession,
   readPairingSession,
   resolveBridgeLogsDir,
   resolveBridgeStderrLogPath,

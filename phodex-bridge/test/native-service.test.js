@@ -165,13 +165,17 @@ test('shared runner publishes fresh pairing and status without printing QR', asy
 
 test('service QR waiting rejects expired payloads and accepts only a fresh session', async (t) => {
   const { createNativeBridgeService } = require('../src/native-bridge-service');
-  const { writePairingSession } = require('../src/daemon-state');
+  const { writeBridgeStatus, writePairingSession } = require('../src/daemon-state');
   const { env } = fixture(t);
   let clock = 100000;
   let polls = 0;
   const backend = { install() {}, start() { writePairingSession({ pairingPayload: { sessionId: 'expired', expiresAt: clock - 1 } }, { env, now: () => clock }); }, status: () => ({ running: false }) };
-  const result = await createNativeBridgeService({ platform: 'linux', env, backend, now: () => clock, sleep: async () => { polls++; clock += 200; writePairingSession({ pairingPayload: { sessionId: 'fresh', expiresAt: clock + 10000 } }, { env, now: () => clock }); } }).start({ waitForPairing: true });
-  assert.equal(polls, 1);
+  const result = await createNativeBridgeService({ platform: 'linux', env, backend, now: () => clock, sleep: async () => {
+    polls++; clock += 200;
+    if (polls === 1) writePairingSession({ pairingPayload: { sessionId: 'fresh', expiresAt: clock + 10000 } }, { env, now: () => clock });
+    if (polls === 2) writeBridgeStatus({ state: 'running', connectionStatus: 'connected' }, { env, now: () => clock });
+  } }).start({ waitForPairing: true });
+  assert.equal(polls, 2);
   assert.equal(result.pairingSession.pairingPayload.sessionId, 'fresh');
 });
 

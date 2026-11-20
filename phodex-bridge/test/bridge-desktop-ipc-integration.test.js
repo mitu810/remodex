@@ -1438,7 +1438,8 @@ test("overlapping phone initializes can reconnect to the same spawned Codex tran
 });
 
 test("stock endpoint initializes once before phone requests", async (t) => {
-  const relayServer = new WebSocket.Server({ port: 0 });
+  let acceptRelayUpgrade;
+  const relayServer = new WebSocket.Server({ port: 0, verifyClient: (_info, done) => { acceptRelayUpgrade = done; } });
   const messages = [];
   const fakeCodex = createFakeCodexTransport();
   let relaySocket;
@@ -1473,7 +1474,10 @@ test("stock endpoint initializes once before phone requests", async (t) => {
   assert.equal(initialize.method, "initialize");
   assert.equal(initialize.params.capabilities.experimentalApi, true);
   fakeCodex.emitMessage({ id: initialize.id, result: { userAgent: "codex-test" } });
-  await waitFor(() => relaySocket?.readyState === WebSocket.OPEN);
+  await waitFor(() => acceptRelayUpgrade);
+  assert.equal(publishedPairings.length, 0, "do not show pairing before the relay accepts the bridge");
+  acceptRelayUpgrade(true);
+  await waitFor(() => relaySocket?.readyState === WebSocket.OPEN && publishedPairings.length === 1);
   assert.deepEqual(fakeCodex.sent[1], { method: "initialized" });
   assert.equal(publishedPairings.length, 1);
   assert.equal(messages.some((message) => message.id === initialize.id), false);

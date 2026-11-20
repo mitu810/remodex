@@ -134,12 +134,12 @@ test("remodex up shows a startup indicator while waiting for the pairing QR", as
   ]);
 });
 
-test("remodex qr refreshes service config and prints the pairing QR", async () => {
+test("remodex qr --refresh restarts the bridge and prints its fresh invitation", async () => {
   const calls = [];
   const messages = [];
 
   await main({
-    argv: ["node", "remodex", "qr"],
+    argv: ["node", "remodex", "qr", "--refresh"],
     platform: "darwin",
     consoleImpl: {
       log(message) {
@@ -153,8 +153,8 @@ test("remodex qr refreshes service config and prints the pairing QR", async () =
       throw new Error(`unexpected exit ${code}`);
     },
     deps: {
-      async startMacOSBridgeService(options) {
-        calls.push(["start-service", options]);
+      async restartMacOSBridgeService(options) {
+        calls.push(["restart-service", options]);
         return {
           pairingSession: { pairingPayload: { sessionId: "session-qr" } },
         };
@@ -166,15 +166,30 @@ test("remodex qr refreshes service config and prints the pairing QR", async () =
   });
 
   assert.deepEqual(messages, [
-    "[remodex] Refreshing bridge pairing QR...",
+    "[remodex] Restarting bridge for a fresh pairing QR...",
   ]);
   assert.deepEqual(calls, [
-    ["start-service", { waitForPairing: true }],
-    ["print-qr", { pairingSession: { pairingPayload: { sessionId: "session-qr" } } }],
+    ["restart-service", { waitForPairing: true }],
+    ["print-qr", { pairingSession: { pairingPayload: { sessionId: "session-qr" } }, includeCopyableCode: true }],
   ]);
 });
 
-test("remodex pair is an alias for the QR refresh flow", async () => {
+test("remodex qr prints the running Bridge invitation and paste code without restarting", async () => {
+  const pairingSession = { pairingPayload: { sessionId: "test-session" }, pairingCode: "ABCDEFGHJK" };
+  const calls = [];
+  await main({
+    argv: ["node", "remodex", "qr"], platform: "linux",
+    consoleImpl: { log() {}, error: assert.fail }, exitImpl: assert.fail,
+    deps: { nativeService: {
+      async start() { assert.fail("QR display must not start another bridge"); },
+      readPairingSession() { return pairingSession; },
+      printPairingQr(options) { calls.push(options); },
+    } },
+  });
+  assert.deepEqual(calls, [{ pairingSession, includeCopyableCode: true }]);
+});
+
+test("remodex pair is an alias for reading the current QR", async () => {
   const calls = [];
 
   await main({
@@ -190,11 +205,9 @@ test("remodex pair is an alias for the QR refresh flow", async () => {
       throw new Error(`unexpected exit ${code}`);
     },
     deps: {
-      async startMacOSBridgeService(options) {
-        calls.push(["start-service", options]);
-        return {
-          pairingSession: { pairingPayload: { sessionId: "session-pair" } },
-        };
+      readMacOSBridgePairingSession() {
+        calls.push(["read-pairing"]);
+        return { pairingPayload: { sessionId: "session-pair" } };
       },
       printMacOSBridgePairingQr(options) {
         calls.push(["print-qr", options]);
@@ -203,12 +216,12 @@ test("remodex pair is an alias for the QR refresh flow", async () => {
   });
 
   assert.deepEqual(calls, [
-    ["start-service", { waitForPairing: true }],
-    ["print-qr", { pairingSession: { pairingPayload: { sessionId: "session-pair" } } }],
+    ["read-pairing"],
+    ["print-qr", { pairingSession: { pairingPayload: { sessionId: "session-pair" } }, includeCopyableCode: true }],
   ]);
 });
 
-test("remodex pair --json exposes the refreshed pairing payload", async () => {
+test("remodex pair --refresh --json exposes the refreshed pairing payload", async () => {
   const writes = [];
   const originalWrite = process.stdout.write;
 
@@ -222,7 +235,7 @@ test("remodex pair --json exposes the refreshed pairing payload", async () => {
 
   try {
     await main({
-      argv: ["node", "remodex", "pair", "--json"],
+      argv: ["node", "remodex", "pair", "--refresh", "--json"],
       platform: "darwin",
       consoleImpl: {
         log(message) {
@@ -236,7 +249,7 @@ test("remodex pair --json exposes the refreshed pairing payload", async () => {
         throw new Error(`unexpected exit ${code}`);
       },
       deps: {
-        async startMacOSBridgeService(options) {
+        async restartMacOSBridgeService(options) {
           assert.deepEqual(options, { waitForPairing: true });
           return {
             plistPath: "/tmp/remodex.plist",
@@ -392,6 +405,7 @@ for (const platform of ['win32', 'linux']) {
       async stop() { calls.push(['stop']); },
       async uninstall() { calls.push(['uninstall']); return { removed: true }; },
       async resetPairing() { calls.push(['reset']); },
+      readPairingSession() { calls.push(['read-pairing']); return pairingSession; },
       printPairingQr(options) { calls.push(['qr', options]); },
       printStatus() { calls.push(['status']); },
     };
@@ -402,7 +416,7 @@ for (const platform of ['win32', 'linux']) {
     assert.deepEqual(calls, [
       ['start', { waitForPairing: true }], ['qr', { pairingSession }],
       ['start', undefined], ['restart'], ['stop'], ['status'],
-      ['start', { waitForPairing: true }], ['qr', { pairingSession }], ['reset'], ['uninstall'],
+      ['read-pairing'], ['qr', { pairingSession, includeCopyableCode: true }], ['reset'], ['uninstall'],
     ]);
   });
 }
