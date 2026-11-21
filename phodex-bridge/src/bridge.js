@@ -781,7 +781,8 @@ function startBridgeSession({
   readManagedRelay = readLocalRelayUpdateService,
 }, { relaySessionId, scheduleRestart, requestExit, desktopRestartFailed = false }) {
   const config = explicitConfig || readBridgeConfig();
-  const catalogDeletionScope = config.codexEndpoint ? null : randomBytes(16).toString("hex");
+  const localCatalog = !config.codexEndpoint || config.codexEndpoint.startsWith("ws+unix:");
+  const catalogDeletionScope = !localCatalog ? null : randomBytes(16).toString("hex");
   config.keepMacAwakeEnabled = config.keepMacAwakeEnabled === true;
   const initializeEndpoint = Boolean(config.codexEndpoint) && config.codexEndpointInitialize === true;
   const endpointMethods = new Set(
@@ -2356,10 +2357,15 @@ function startBridgeSession({
         if (thread.runtimeProvider === "opencode") {
           return;
         }
-        if (!config.codexEndpoint) {
+        if (localCatalog) {
           reconcileLegacyHomeThreadProject(thread, legacyProjectCwdByThreadId, trackedRequest.explicitResumeCwd);
         }
-        threadRuntimeSettingsStore.attachToThread(thread);
+        if (initializeEndpoint && trackedRequest.method === "thread/resume" && parsed.result.model) {
+          threadRuntimeSettingsStore.observe(thread.id, parsed.result);
+        }
+        threadRuntimeSettingsStore.attachToThread(thread, {
+          readCurrentSettings: trackedRequest.method !== "thread/list",
+        });
         threadListProvenanceEnricher.attachToThread(thread);
         worktreeOriginEnricher.attachToThread(thread);
         if (trackedRequest.method !== "thread/list") {
@@ -2650,7 +2656,11 @@ function startBridgeSession({
   }
 
   function bridgeManagedInitializeResult() {
-    return { bridgeManaged: true, remodexRuntimeSettingsVersion: 2 };
+    return {
+      bridgeManaged: true,
+      remodexRuntimeSettingsVersion: 2,
+      ...(initializeEndpoint ? { remodexSharedAppServer: true } : {}),
+    };
   }
 
   // A phone can reconnect before the first initialize reply reaches the

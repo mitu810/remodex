@@ -102,9 +102,17 @@ function createThreadRuntimeSettingsStore({
     return forEachThreadRowInResponse(method, envelope, attachToThread);
   }
 
-  function attachToThread(thread) {
+  function attachToThread(thread, { readCurrentSettings = false } = {}) {
     const threadId = normalizeString(thread?.id) || normalizeString(thread?.threadId);
-    const settings = get(threadId);
+    let settings = get(threadId);
+    // Modern thread/read exposes the configured effort. A delayed catalog row
+    // must not roll back a settings acknowledgement or a next-turn selection.
+    const effort = normalizeString(thread?.reasoningEffort);
+    const updatedAtMs = Number(thread?.updatedAt) * 1000;
+    if (readCurrentSettings && effort && !thread.runtimeSettings
+        && (!settings || updatedAtMs > settings.updatedAt)) {
+      settings = observe(threadId, { model: thread.model, reasoningEffort: effort });
+    }
     if (!settings || !thread || typeof thread !== "object") {
       return thread;
     }

@@ -137,3 +137,16 @@ for (const tier of ["priority", null]) {
     assert.equal(complete.serviceTier, tier);
   });
 }
+
+test("a fresh runtime read supersedes a cached phone effort, without replaying older reads", (t) => {
+  const now = 1700000000000;
+  const { store } = fixture(t, { now: () => now });
+  store.commit("chat", { effort: "medium", serviceTier: "priority" }, { source: "phone" });
+  const read = { id: "chat", updatedAt: now / 1000 + 1, reasoningEffort: "high" };
+  store.attachToThread(read, { readCurrentSettings: true });
+  assert.equal(read.runtimeSettings.reasoningEffort, "high");
+  assert.equal(read.runtimeSettings.serviceTier, "priority");
+  const stale = { id: "chat", updatedAt: now / 1000 - 1, reasoningEffort: "medium" };
+  store.attachToThread(stale, { readCurrentSettings: true });
+  assert.equal(stale.runtimeSettings.reasoningEffort, "high");
+});

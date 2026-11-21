@@ -718,7 +718,7 @@ function readBridgeConfig({
     : privateDefaults.pushServiceUrl;
   const codexEndpoint = readFirstDefinedEnv(
     ["REMODEX_CODEX_ENDPOINT", "PHODEX_CODEX_ENDPOINT"],
-    "",
+    daemonConfig.codexEndpoint?.startsWith("ws+unix:") ? daemonConfig.codexEndpoint : "",
     env
   );
   const refreshCommand = readFirstDefinedEnv(
@@ -767,7 +767,9 @@ function readBridgeConfig({
       ? (persistedKeepMacAwakeEnabled == null ? false : persistedKeepMacAwakeEnabled)
       : explicitKeepMacAwakeEnabled,
     codexEndpoint,
-    codexEndpointInitialize: readOptionalBooleanEnv(["REMODEX_CODEX_ENDPOINT_INITIALIZE"], env) === true,
+    codexEndpointInitialize: readOptionalBooleanEnv(["REMODEX_CODEX_ENDPOINT_INITIALIZE"], env)
+      ?? (codexEndpoint.startsWith("ws+unix:") && codexEndpoint === daemonConfig.codexEndpoint
+        && daemonConfig.codexEndpointInitialize === true),
     codexEndpointMethods: readFirstDefinedEnv(["REMODEX_CODEX_ENDPOINT_METHODS"], "", env)
       .split(",").map((method) => method.trim()).filter(Boolean),
     desktopIpcSocketPath: readFirstDefinedEnv(["REMODEX_DESKTOP_IPC_SOCKET"], "", env),
