@@ -3,9 +3,11 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { execFile } = require("node:child_process");
 const { promisify } = require("node:util");
+const { createCodexTransport } = require("./codex-transport");
 const { createCodexLaunchPlans } = require("./codex-launch");
 const {
-  accountError, readInstalledCredential, replaceCodexCredential,
+  accountError, checkSharedCredential, credentialFingerprint, usableCredentialFingerprint, withAccountTransport,
+  readInstalledCredential, replaceCodexCredential,
   validateCodexCredentialReplacement, writeInstalledCredential,
 } = require("./account-credentials");
 
@@ -59,14 +61,30 @@ async function requireIdleThreads(rpc) {
   } while (cursor);
 }
 
+async function verifySharedLogin(endpoint, credential) {
+  const expected = credentialFingerprint(credential);
+  await withAccountTransport(createCodexTransport({ endpoint }), async call => {
+    const account = await call("account/read", { refreshToken: false });
+    const status = await call("getAuthStatus", { includeToken: true, refreshToken: false });
+    if (!expected || usableCredentialFingerprint(account, status) !== expected) {
+      throw accountError("account_login_failed", "The shared Codex service could not sign in with this credential.");
+    }
+    await call("account/rateLimits/read", {});
+  });
+}
+
 async function prepareSharedAccountSwitch(options) {
-  const { home, credential, rpc, appPath, daemon = daemonCommands(home, appPath) } = options;
+  const { home, credential, rpc, appPath, daemon = daemonCommands(home, appPath),
+    checkCandidate = checkSharedCredential, verifyLogin = verifySharedLogin,
+    checkIdleAfterStart = endpoint => withAccountTransport(createCodexTransport({ endpoint }), requireIdleThreads),
+  } = options;
   if (!isLocalSharedCodex(options)) throw unsupported();
   const info = await daemon("version");
   if (info?.status !== "running" || !["pid", "launchd"].includes(info.backend)
     || !samePath(info.socketPath, path.join(home, "app-server-control", "app-server-control.sock"))) throw unsupported();
   const previous = validateCodexCredentialReplacement(home, credential);
   await requireIdleThreads(rpc);
+  await checkCandidate(credential, appPath);
 
   // The supervisor closes its own socket before this runs. Stop the daemon before writing:
   // a still-running account can rotate its tokens during shutdown.
@@ -79,15 +97,25 @@ async function prepareSharedAccountSwitch(options) {
       throw error;
     }
     let replaced = false;
+    let started = false;
     try {
       if (previous !== readInstalledCredential(home)) {
         throw accountError("account_file_changed", "Codex updated the host credential during the operation. Try again.");
       }
       replaced = replaceCodexCredential(home, credential).restartRequired;
       await daemon("start");
+      started = true;
+      await verifyLogin(options.endpoint, credential);
     } catch (failure) {
       try {
-        if (replaced && readInstalledCredential(home) === credential) writeInstalledCredential(home, credential, previous);
+        if (replaced && readInstalledCredential(home) === credential) {
+          if (started) {
+            // Desktop users may already have started a turn or signed in independently.
+            await checkIdleAfterStart(options.endpoint);
+            await daemon("stop");
+          }
+          writeInstalledCredential(home, credential, previous);
+        }
       } finally {
         await daemon("start");
       }

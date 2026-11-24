@@ -84,6 +84,15 @@ function activeCredentialFingerprint(account, authStatus) {
   return typeof user === "string" && user && typeof workspace === "string" ? fingerprint(user, workspace) : null;
 }
 
+function usableCredentialFingerprint(account, authStatus) {
+  if (!isChatGPTAuthMethod(account?.account?.type) || !isChatGPTAuthMethod(authStatus?.authMethod)
+    || typeof authStatus?.authToken !== "string" || !authStatus.authToken.trim()) return null;
+  if (Object.hasOwn(account, "workspaceRouting") && !account.workspaceRouting?.chatgptAccountId) return null;
+  const live = activeCredentialFingerprint(account, authStatus);
+  const bearer = activeCredentialFingerprint(null, authStatus);
+  return bearer && bearer !== live ? null : live;
+}
+
 // Some shared daemons retain a selected ChatGPT session while token/routing reads
 // are incomplete. Its identity is authoritative independently of token readiness.
 async function readLiveAccountIdentity(account, authStatus, listSessions) {
@@ -170,49 +179,81 @@ function writeInstalledCredential(home, previous, raw) {
 // Reuses the bridge's platform-aware Codex launcher, including Windows npm shims.
 async function queryCredential(raw, { renew, appPath, env = process.env, createTransport = createCodexTransport }) {
   parseCredential(raw);
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), "remodex-credential-"));
-  let transport;
-  let closed;
-  try {
-    ensurePrivateDirectory(home);
+  return withIsolatedAccount(appPath, env, createTransport, async (home, connect) => {
     writePrivateFile(path.join(home, "auth.json"), raw);
-    writePrivateFile(path.join(home, "config.toml"), 'cli_auth_credentials_store = "file"\n');
-    const isolatedEnv = Object.fromEntries(Object.entries(env).filter(([key]) =>
-      !/^(CODEX_HOME|OPENAI_API_KEY|CODEX_API_KEY|CODEX_ACCESS_TOKEN|OPENAI_BASE_URL|CODEX_BASE_URL)$/i.test(key)));
-    transport = createTransport({ appPath, env: { ...isolatedEnv, CODEX_HOME: home } });
-    closed = new Promise((resolve) => transport.onClose(resolve));
     let read;
     try {
-      read = await runAccountCheck(transport, renew, closed);
-    } catch (error) {
-      // Codex can have already persisted the rotated auth before its next RPC fails.
-      try {
-        const recovered = readInstalledCredential(home);
-        if (recovered && recovered !== raw && credentialIdentity(recovered) === credentialIdentity(raw)) {
-          return { credential: recovered, usageUnavailable: true };
+      read = await connect(async call => {
+        const result = {};
+        if (renew) {
+          try { await call("account/read", { refreshToken: true }); }
+          catch { result.renewalFailed = true; }
         }
-      } catch {}
-      throw error;
+        try { result.usage = await call("account/rateLimits/read", {}); }
+        catch { result.usageUnavailable = true; }
+        return result;
+      });
+    } catch (error) {
+      // Preserve a rotation even when the next RPC or the transport fails.
+      const recovered = readInstalledCredential(home);
+      if (!recovered || recovered === raw || credentialIdentity(recovered) !== credentialIdentity(raw)) throw error;
+      return { credential: recovered, usageUnavailable: true };
     }
     const current = readInstalledCredential(home);
     if (current && current !== raw && credentialIdentity(current) === credentialIdentity(raw)) read.credential = current;
     if (renew && !read.credential) read.renewalFailed = true;
     return read;
+  });
+}
+
+// Verify the bearer with the backend without handing the probe a refresh token.
+// Only the destination's managed Codex may rotate a credential during a switch.
+async function checkSharedCredential(raw, appPath, createTransport = createCodexTransport) {
+  const { tokens } = parseCredential(raw);
+  const [, workspace] = JSON.parse(credentialIdentity(raw));
+  try {
+    await withIsolatedAccount(appPath, process.env, createTransport, (_home, connect) => connect(async call => {
+      await call("account/login/start", {
+        type: "chatgptAuthTokens", accessToken: tokens.access_token, chatgptAccountId: workspace,
+      });
+      await call("account/rateLimits/read", {});
+    }));
+  } catch {
+    throw accountError("account_credential_unverified",
+      "Codex could not verify this saved account online. Check the connection, renew the saved credential or import a fresh auth.json, then try again.");
+  }
+}
+
+async function withIsolatedAccount(appPath, env, createTransport, operation) {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "remodex-credential-"));
+  try {
+    ensurePrivateDirectory(home);
+    writePrivateFile(path.join(home, "config.toml"), 'cli_auth_credentials_store = "file"\n');
+    const isolatedEnv = Object.fromEntries(Object.entries(env).filter(([key]) =>
+      !/^(CODEX_HOME|OPENAI_API_KEY|CODEX_API_KEY|CODEX_ACCESS_TOKEN|OPENAI_BASE_URL|CODEX_BASE_URL)$/i.test(key)));
+    return await operation(home, check => withAccountTransport(
+      createTransport({ appPath, env: { ...isolatedEnv, CODEX_HOME: home } }), check));
   } finally {
-    if (transport) {
-      transport.shutdown();
-      let timer;
-      await Promise.race([closed, new Promise((resolve) => { timer = setTimeout(resolve, 1500); })]);
-      clearTimeout(timer);
-    }
     fs.rmSync(home, { recursive: true, force: true });
   }
 }
 
-function runAccountCheck(transport, renew, closed) {
+async function withAccountTransport(transport, check) {
+  const closed = new Promise(resolve => transport.onClose(resolve));
+  try {
+    return await runAccountCheck(transport, check, closed);
+  } finally {
+    transport.shutdown({ forceAfterMs: 1000 });
+    let timer;
+    await Promise.race([closed, new Promise(resolve => { timer = setTimeout(resolve, 1500); })]);
+    clearTimeout(timer);
+  }
+}
+
+function runAccountCheck(transport, check, closed) {
   return new Promise((resolve, reject) => {
     let id = 0;
-    let pending;
+    const pending = new Map();
     let finished = false;
     const timeout = setTimeout(() => finish(accountError("account_check_timeout", "Codex took too long to check this account.")), 35_000);
 
@@ -220,18 +261,18 @@ function runAccountCheck(transport, renew, closed) {
       if (finished) return;
       finished = true;
       clearTimeout(timeout);
-      if (pending) {
-        const reply = pending;
-        pending = null;
+      for (const reply of pending.values()) {
         reply.reject(error ?? accountError("account_check_failed", "Could not check this account."));
       }
+      pending.clear();
       if (error) reject(error);
       else resolve(result);
     }
 
     function call(method, params) {
+      if (finished) return Promise.reject(accountError("account_check_failed", "The Codex account check ended."));
       return new Promise((resolveCall, rejectCall) => {
-        pending = { id: ++id, resolve: resolveCall, reject: rejectCall };
+        pending.set(++id, { resolve: resolveCall, reject: rejectCall });
         transport.send(JSON.stringify({ id, method, params }));
       });
     }
@@ -242,24 +283,17 @@ function runAccountCheck(transport, renew, closed) {
     transport.onMessage((line) => {
       let message;
       try { message = JSON.parse(line); } catch { return; }
-      if (finished || !pending || message?.id !== pending.id || message.method) return;
-      const reply = pending;
-      pending = null;
+      const reply = pending.get(message?.id);
+      if (finished || !reply || message.method) return;
+      pending.delete(message.id);
       if (message.error || !message.result) reply.reject(accountError("account_check_failed", "Codex could not check this account."));
       else reply.resolve(message.result);
     });
     transport.onStarted(async () => {
       try {
-        await call("initialize", { clientInfo: { name: "remodex-account-check", version: "1.0.0" } });
+        await call("initialize", { clientInfo: { name: "remodex-account-check", version: "1.0.0" }, capabilities: { experimentalApi: true } });
         transport.send(JSON.stringify({ method: "initialized" }));
-        const result = {};
-        if (renew) {
-          try { await call("account/read", { refreshToken: true }); }
-          catch { result.renewalFailed = true; }
-        }
-        try { result.usage = await call("account/rateLimits/read", {}); }
-        catch { result.usageUnavailable = true; }
-        finish(null, result);
+        finish(null, await check(call));
       } catch (error) {
         finish(error);
       }
@@ -268,7 +302,7 @@ function runAccountCheck(transport, renew, closed) {
 }
 
 module.exports = {
-  accountError, activeCredentialFingerprint, credentialFingerprint, credentialIdentity,
+  accountError, activeCredentialFingerprint, usableCredentialFingerprint, checkSharedCredential, withAccountTransport, credentialFingerprint, credentialIdentity,
   createCredentialCheckRecovery, queryCredential, readInstalledCredential, replaceCodexCredential,
   validateCodexCredentialReplacement, writeInstalledCredential, readLiveAccountIdentity,
 };

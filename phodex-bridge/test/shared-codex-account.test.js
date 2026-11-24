@@ -20,6 +20,7 @@ function fixture(t) {
   const options = {
     home, endpoint: "ws+unix://localhost" + socketPath + ":/rpc",
     server: { platformOs: "macos", codexHome: home }, platform: "darwin", credential,
+    checkCandidate: async () => {}, verifyLogin: async () => {}, checkIdleAfterStart: async () => {},
     rpc: async (method, params) => {
       if (method === "thread/loaded/list") return params.cursor ? { data: ["last"] } : { data: ["first"], nextCursor: "next" };
       assert.equal(method, "thread/read");
@@ -93,4 +94,33 @@ test("work started during reply delivery cancels the daemon restart and reconnec
   assert.equal(switched, false);
   assert.deepEqual(connections, [undefined, true]);
   await bridge.stop();
+});
+
+test("an unverifiable candidate leaves the running daemon and original file alone", async t => {
+  const { options, calls, file, previous } = fixture(t);
+  options.checkCandidate = async () => { throw Error("could not authenticate"); };
+  await assert.rejects(prepareSharedAccountSwitch(options), /authenticate/);
+  assert.deepEqual(calls, ["version"]);
+  assert.equal(fs.readFileSync(file, "utf8"), previous);
+});
+
+test("a restarted daemon that cannot authenticate rolls back before reconnect", async t => {
+  const { options, calls, file, previous } = fixture(t);
+  options.verifyLogin = async () => { throw Error("no active login"); };
+  const restart = await prepareSharedAccountSwitch(options);
+  await assert.rejects(restart(), /no active login/);
+  assert.deepEqual(calls, ["version", "stop", "start", "stop", "start"]);
+  assert.equal(fs.readFileSync(file, "utf8"), previous);
+});
+
+test("rollback preserves a concurrent desktop login", async t => {
+  const { options, calls, file } = fixture(t);
+  options.verifyLogin = async () => {
+    fs.writeFileSync(file, "concurrent login");
+    throw Error("changed account");
+  };
+  const restart = await prepareSharedAccountSwitch(options);
+  await assert.rejects(restart(), /changed account/);
+  assert.equal(calls.filter(command => command === "stop").length, 1);
+  assert.equal(fs.readFileSync(file, "utf8"), "concurrent login");
 });

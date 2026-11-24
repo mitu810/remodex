@@ -23,7 +23,7 @@ const {
 } = require("./bridge-status");
 const { createCodexTransport } = require("./codex-transport");
 const {
-  accountError, readLiveAccountIdentity, credentialFingerprint, credentialIdentity,
+  accountError, readLiveAccountIdentity, usableCredentialFingerprint, credentialFingerprint, credentialIdentity,
   createCredentialCheckRecovery, queryCredential, readInstalledCredential, replaceCodexCredential,
 } = require("./account-credentials");
 const { resolveCodexHome } = require("./codex-home");
@@ -2077,6 +2077,7 @@ function startBridgeSession({
       if (localDaemon) {
         if (readInstalledCredential(home) === params.credential
           && await readActiveCredentialFingerprint() === credentialFingerprint(params.credential)) {
+          await sendCodexRequest("account/rateLimits/read", {});
           return { restartRequired: false };
         }
         const restartSharedDaemon = await prepareSharedAccountSwitch({
@@ -2175,7 +2176,7 @@ function startBridgeSession({
 
   // Combines account/read + getAuthStatus into one safe snapshot for the phone UI.
   // The two RPCs are settled independently so one transient failure does not hide the other.
-  async function readSanitizedAuthStatus({ refreshToken = true } = {}) {
+  async function readSanitizedAuthStatus() {
     if (pendingCredentialReload && credentialRestartScheduled) {
       throw accountError("account_restart_in_progress", "This device is restarting to use the new Codex credential.");
     }
@@ -2185,7 +2186,7 @@ function startBridgeSession({
       }),
       sendCodexRequest("getAuthStatus", {
         includeToken: true,
-        refreshToken: refreshToken && credentialOperation !== "apply" && !pendingCredentialReload,
+        refreshToken: false,
       }),
       readBridgePackageVersionStatus(),
     ]);
@@ -2208,8 +2209,9 @@ function startBridgeSession({
     const account = accountReadResult.value;
     const authStatus = authStatusResult.value;
     if (pendingCredentialReload) return snapshot;
-    const { fingerprint, email } = await readLiveAccountIdentity(account, authStatus,
+    const { email } = await readLiveAccountIdentity(account, authStatus,
       () => sendCodexRequest("accountSession/list", { refreshWorkspaceMetadata: false }, { timeoutMs: 4000 }));
+    const fingerprint = usableCredentialFingerprint(account, authStatus);
     if (email) snapshot.email = email;
     if (fingerprint) {
       snapshot.managedCredentialStatus = { fingerprint, desktopRestartFailed };
@@ -2222,7 +2224,7 @@ function startBridgeSession({
 
   async function readActiveCredentialFingerprint() {
     try {
-      const snapshot = await readSanitizedAuthStatus({ refreshToken: false });
+      const snapshot = await readSanitizedAuthStatus();
       return snapshot.managedCredentialStatus?.fingerprint ?? null;
     } catch {
       return null;

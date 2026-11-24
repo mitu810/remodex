@@ -166,3 +166,41 @@ test("shared runtime matches its selected login and workspace even without a liv
   assert.deepEqual(await readLiveAccountIdentity({}, auth, async () => { throw Error("unsupported"); }), {fingerprint:null,email:null});
   assert.deepEqual(await readLiveAccountIdentity({}, {authMethod:"apiKey"}, () => assert.fail("unexpected session lookup")), {fingerprint:null,email:null});
 });
+
+test("a selected account alone cannot confirm a usable desktop login", () => {
+  const { usableCredentialFingerprint } = require("../src/account-credentials");
+  const account = { account: { type: "chatgpt" }, userId: "fixture-user", workspaceRouting: { chatgptAccountId: "work" } };
+  const status = { authMethod: "chatgpt", authToken: "access" };
+  assert.equal(usableCredentialFingerprint(account, status), credentialFingerprint(credential("work")));
+  assert.equal(usableCredentialFingerprint({ ...account, workspaceRouting: null }, status), null);
+  assert.equal(usableCredentialFingerprint({ ...account, account: null }, status), null);
+  const other = { "https://api.openai.com/auth": { chatgpt_user_id: "other", chatgpt_account_id: "work" } };
+  const otherToken = "x." + Buffer.from(JSON.stringify(other)).toString("base64url") + ".x";
+  assert.equal(usableCredentialFingerprint(account, { ...status, authToken: otherToken }), null);
+  assert.equal(usableCredentialFingerprint(account, { ...status, authToken: null }), null);
+});
+
+test("the online preflight gives the isolated Codex only the access token and rejects a failed request", async () => {
+  const { checkSharedCredential } = require("../src/account-credentials");
+  let temporaryHome;
+  const createTransport = ({ env }) => {
+    temporaryHome = env.CODEX_HOME;
+    assert.equal(fs.existsSync(path.join(temporaryHome, "auth.json")), false);
+    let message, close;
+    return {
+      onStarted(fn) { queueMicrotask(fn); }, onError() {},
+      onMessage(fn) { message = fn; }, onClose(fn) { close = fn; }, shutdown() { close(); },
+      send(raw) {
+        const { method, id, params } = JSON.parse(raw);
+        if (method === "initialized") return;
+        if (method === "account/login/start") {
+          assert.deepEqual(params, { type: "chatgptAuthTokens", accessToken: "access", chatgptAccountId: "work" });
+        }
+        message(JSON.stringify(method === "account/rateLimits/read"
+          ? { id, error: { message: "unauthorized" } } : { id, result: {} }));
+      },
+    };
+  };
+  await assert.rejects(checkSharedCredential(credential("work"), "", createTransport), { errorCode: "account_credential_unverified" });
+  assert.equal(fs.existsSync(temporaryHome), false);
+});
