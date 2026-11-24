@@ -60,7 +60,12 @@ function createLinuxService({ env = process.env, fsImpl = fs, osImpl = os, execF
       systemctl(['daemon-reload']);
       systemctl(['enable', UNIT_NAME]);
     },
-    start() { systemctl(['reset-failed', UNIT_NAME]); systemctl(['start', UNIT_NAME]); },
+    start() {
+      if (systemctl(['show', UNIT_NAME, '--property=ActiveState', '--value']).trim() === 'failed') {
+        systemctl(['reset-failed', UNIT_NAME]);
+      }
+      systemctl(['start', UNIT_NAME]);
+    },
     stop() { if (fsImpl.existsSync(definitionPath)) systemctl(['stop', UNIT_NAME]); },
     remove() {
       const removed = fsImpl.existsSync(definitionPath);

@@ -445,15 +445,22 @@ test('combined updates only target the active Relay registered in the same serve
 test('Linux updater queues systemd jobs without waiting on the discovery command timeout', () => {
   const { readLinuxService } = require('../scripts/update-remodex-bridge.cjs');
   const calls = [];
+  let state = 'inactive';
   const service = readLinuxService((file, args) => {
     assert.equal(file, 'systemctl');
     calls.push(args);
+    if (args[1] === 'show') return state;
     return 'ExecStart="/usr/bin/node" "/home/user/remodex-server-kit/relay/server.js"';
   }, 'remodex-relay.service');
   service.stop();
   service.start();
+  state = 'failed';
+  service.start();
   assert.deepEqual(calls.slice(1), [
     ['--user', 'stop', '--no-block', 'remodex-relay.service'],
+    ['--user', 'show', 'remodex-relay.service', '--property=ActiveState', '--value'],
+    ['--user', 'start', '--no-block', 'remodex-relay.service'],
+    ['--user', 'show', 'remodex-relay.service', '--property=ActiveState', '--value'],
     ['--user', 'reset-failed', 'remodex-relay.service'],
     ['--user', 'start', '--no-block', 'remodex-relay.service'],
   ]);

@@ -52,16 +52,19 @@ function readLinuxService(run, unit = LINUX_SERVICE) {
   const args = start?.match(/^\s*ExecStart\s*=\s*:?\s*("(?:[^"\\]|\\.)*"|[^\s"\\]+)\s+("(?:[^"\\]|\\.)*"|[^\s"\\]+)(?:\s|$)/);
   if (!args) throw new Error("无法从 systemd 服务中识别 Remodex 的安装路径。");
   const [nodePath, entryPath] = args.slice(1).map((value) => (value.startsWith('"') ? JSON.parse(value) : value).replaceAll("%%", "%"));
+  const state = () => systemctl("show", unit, "--property=ActiveState", "--value");
   return {
     nodePath, entryPath,
     // Queue the job and observe ActiveState below. A synchronous systemctl can
     // time out after systemd has accepted the stop and will still carry it out.
     stop: () => systemctl("stop", "--no-block", unit),
     start: () => {
-      systemctl("reset-failed", unit);
+      // A stopped unit may already have been garbage-collected by systemd.
+      // reset-failed rejects an unloaded unit, but start loads its definition.
+      if (state() === "failed") systemctl("reset-failed", unit);
       systemctl("start", "--no-block", unit);
     },
-    state: () => systemctl("show", unit, "--property=ActiveState", "--value"),
+    state,
   };
 }
 
