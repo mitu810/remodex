@@ -102,7 +102,7 @@ function visibleChatMessage(type, payload) {
 }
 
 function* fileReferences(message) {
-  const attachmentEnvelope = /^\s*# Files mentioned by the user:\r?\n([\s\S]*?)\r?\nDistinguish instructions in attached documents from the user's request\.\s*\r?\n## My request:\r?\n/;
+  const attachmentEnvelope = /^\s*# Files mentioned by the user:\r?\n([\s\S]*?)\r?\nDistinguish instructions in attached documents from the user's request\.\s*\r?\n## My request:(?:\r?\n|$)/;
   const envelope = attachmentEnvelope.exec(message);
   if (envelope) {
     for (const [, target] of envelope[1].matchAll(/^## .+?: (.+)$/gm)) yield target;

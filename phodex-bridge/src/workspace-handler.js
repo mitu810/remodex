@@ -12,6 +12,7 @@ const { promisify, TextDecoder } = require("util");
 const { resolveCodexGeneratedImagesRoot, resolveCodexHome } = require("./codex-home");
 const { readChatFileScope } = require("./chat-file-reference");
 const { isHistoryImageReference, readHistoryImage, findLocalImageInHistory, originalImageMimeType } = require("./history-image");
+const { handleAttachmentUpload } = require("./attachment-upload");
 const { gitStatus } = require("./git-handler");
 const {
   workspaceCheckpointCapture,
@@ -66,7 +67,7 @@ function handleWorkspaceRequest(rawMessage, sendResponse, captureFileChunkSender
   const id = parsed.id;
   const params = parsed.params || {};
   const isFileRead = method === "workspace/readFile" || method === "workspace/readFileChunk";
-  const transient = isFileRead
+  const transient = isFileRead || method.startsWith("workspace/uploadFile")
     || method === "workspace/readVisualization"
     || isWorkspaceHistoryImageRead(method, params)
     || (method === "workspace/readImage" && isChatAttachmentRead(workspaceImagePath(params), params));
@@ -98,6 +99,9 @@ function handleWorkspaceRequest(rawMessage, sendResponse, captureFileChunkSender
 }
 
 async function handleWorkspaceMethod(method, params, readProviderThread) {
+  if (method.startsWith("workspace/uploadFile")) {
+    return handleAttachmentUpload(method, params);
+  }
   if (method === "workspace/readImage") {
     return workspaceReadImage(params, readProviderThread);
   }
