@@ -5,6 +5,7 @@ const path = require("node:path");
 const { createHash } = require("node:crypto");
 const { execFile, execFileSync } = require("node:child_process");
 const { promisify } = require("node:util");
+const { setTimeout: delay } = require("node:timers/promises");
 const { releaseRepository, version } = require("../package.json");
 
 const repositoryURL = `https://github.com/${releaseRepository}`;
@@ -15,6 +16,8 @@ const updaterName = "update-remodex-bridge.cjs";
 const updaterPath = path.join(__dirname, "..", "scripts", updaterName);
 const execFileAsync = promisify(execFile);
 const bridgeRoot = path.join(__dirname, "..");
+
+class ReleaseValidationError extends Error {}
 
 function supportsBridgeReleaseArchive() {
   const installRoot = path.dirname(bridgeRoot);
@@ -40,15 +43,22 @@ function parseBridgeRelease(release) {
   return { version: tag.slice(1), url, sha256: asset.digest.slice(7), size: asset.size };
 }
 
-async function fetchLatestBridgeRelease() {
-  const response = await fetch(latestReleaseURL, {
+async function fetchLatestBridgeRelease({ fetchImpl = fetch, signal = AbortSignal.timeout(4000) } = {}) {
+  const response = await fetchImpl(latestReleaseURL, {
     headers: { Accept: "application/vnd.github+json", "User-Agent": "Remodex-Bridge" },
     redirect: "error",
-    signal: AbortSignal.timeout(4000),
+    signal,
   });
-  if (!response.ok) throw new Error(`Could not read the bridge release from GitHub (${response.status}).`);
-  const release = parseBridgeRelease(await response.json());
-  if (!release) throw new Error("The latest GitHub release does not contain a verified bridge update.");
+  if (!response.ok) throw await httpFailure(response);
+  let metadata;
+  try {
+    metadata = await response.json();
+  } catch (error) {
+    if (error instanceof SyntaxError) throw new ReleaseValidationError("GitHub returned invalid release JSON.");
+    throw error;
+  }
+  const release = parseBridgeRelease(metadata);
+  if (!release) throw new ReleaseValidationError("The latest GitHub release does not contain a verified bridge update.");
   return release;
 }
 
@@ -73,36 +83,76 @@ function currentCLI() {
   return path.join(__dirname, "..", "bin", "remodex.js");
 }
 
-async function downloadBridgeArchive(release) {
-  const response = await fetch(release.url, { signal: AbortSignal.timeout(30_000) });
-  if (!response.ok || !response.body) throw new Error(`Bridge download failed (${response.status}).`);
+async function httpFailure(response) {
+  await response.body?.cancel().catch(() => {});
+  const retryAfter = response.headers.get("retry-after");
+  const retryAfterMs = /^\d+$/.test(retryAfter || "")
+    ? Number(retryAfter) * 1000 : Math.max(0, (Date.parse(retryAfter) || 0) - Date.now());
+  return Object.assign(new Error(`GitHub returned HTTP ${response.status}.`), { status: response.status, retryAfterMs });
+}
+
+async function downloadBridgeArchive(release, fetchImpl, signal) {
+  const response = await fetchImpl(release.url, { signal });
+  if (!response.ok) throw await httpFailure(response);
+  if (!response.body) throw new ReleaseValidationError("GitHub returned an empty download.");
   const hash = createHash("sha256");
   const chunks = [];
   let size = 0;
   for await (const chunk of response.body) {
     size += chunk.length;
-    if (size > release.size) throw new Error("The bridge download exceeds the published size.");
+    if (size > release.size) throw new ReleaseValidationError("The bridge download exceeds the published size.");
     hash.update(chunk);
     chunks.push(chunk);
   }
   if (size !== release.size || hash.digest("hex") !== release.sha256) {
-    throw new Error("The bridge download failed its SHA-256 verification.");
+    throw new ReleaseValidationError("The bridge download failed its SHA-256 verification.");
   }
   return Buffer.concat(chunks);
 }
 
-async function stageBridgeRelease() {
+const transientNetworkCodes = new Set([
+  "EAI_AGAIN", "ENOTFOUND", "ECONNRESET", "ECONNREFUSED", "ETIMEDOUT", "EPIPE", "EHOSTUNREACH", "ENETUNREACH",
+  "UND_ERR_CONNECT_TIMEOUT", "UND_ERR_HEADERS_TIMEOUT", "UND_ERR_BODY_TIMEOUT", "UND_ERR_SOCKET",
+]);
+
+async function stageBridgeRelease({ fetchImpl = fetch, pause = delay } = {}) {
   if (!supportsBridgeReleaseArchive()) {
     throw new Error("Use the bridge update package from GitHub Releases on this computer.");
   }
-  const release = await fetchLatestBridgeRelease();
+  // Keep both downloads within the phone's update RPC window. Only the
+  // user-initiated install retries; passive version lookups still take one shot.
+  const deadline = Date.now() + 50_000;
+  async function withRetries(stage, timeout, read) {
+    for (let attempt = 1; ; attempt++) {
+      const remaining = Math.max(1, deadline - Date.now());
+      try {
+        return await read(AbortSignal.timeout(Math.min(remaining, timeout)));
+      } catch (error) {
+        const timedOut = ["TimeoutError", "AbortError"].includes(error.name);
+        const networkCode = error.cause?.code || error.code;
+        const networkFailure = transientNetworkCodes.has(networkCode) || (error instanceof TypeError && !error.cause && error.message === "fetch failed");
+        const retryable = timedOut || networkFailure || [408, 429, 500, 502, 503, 504].includes(error.status);
+        const backoff = Math.max(500 * attempt, error.retryAfterMs || 0);
+        if (retryable && attempt < 3 && Date.now() + backoff < deadline) {
+          await pause(backoff);
+          continue;
+        }
+        // Node fetch causes may contain request URLs or proxy credentials.
+        const networkDetail = transientNetworkCodes.has(networkCode) ? `Network request failed (${networkCode}).` : "Network request failed.";
+        const detail = timedOut ? "Request timed out."
+          : (error.status || error instanceof ReleaseValidationError) ? error.message : networkDetail;
+        throw new Error(`${stage} failed after ${attempt} ${attempt === 1 ? "attempt" : "attempts"}. ${detail} The current services are still running.`, { cause: error });
+      }
+    }
+  }
+  const release = await withRetries("GitHub release metadata", 8000, (signal) => fetchLatestBridgeRelease({ fetchImpl, signal }));
   // A native supervisor can outlive a bridge update. Read the installed version
   // from disk so subsequent updates cannot downgrade a newer worker.
   const installed = JSON.parse(fs.readFileSync(path.join(bridgeRoot, "package.json"), "utf8")).version || version;
   if (release.version.localeCompare(installed, "en", { numeric: true }) < 0) {
     throw new Error("The published bridge is older than the installed version.");
   }
-  const archive = await downloadBridgeArchive(release);
+  const archive = await withRetries("Bridge update ZIP download", 30_000, (signal) => downloadBridgeArchive(release, fetchImpl, signal));
   const stage = fs.mkdtempSync(path.join(os.tmpdir(), "remodex-bridge-release-"));
   const archivePath = path.join(stage, archiveName);
   const cleanUp = () => fs.rmSync(stage, { recursive: true, force: true });

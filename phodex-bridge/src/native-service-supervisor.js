@@ -3,7 +3,6 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { fork } = require("node:child_process");
 const { setTimeout: delay } = require("node:timers/promises");
-const { stageBridgeRelease } = require("./bridge-release");
 
 function send(child, message) {
   return new Promise((resolve, reject) => {
@@ -11,12 +10,12 @@ function send(child, message) {
   });
 }
 
-function applyRelease(service, archive, options) {
-  // The supervisor survives directory swaps, so load the currently installed updater each time.
-  const updaterPath = require.resolve("../scripts/update-remodex-bridge.cjs");
-  delete require.cache[updaterPath];
-  const { updateBridge } = require(updaterPath);
-  return updateBridge(service, archive, options);
+function installedModule(id) {
+  // The supervisor survives directory swaps. Use the installed code for both
+  // release discovery/download and service replacement on the next request.
+  const file = require.resolve(id);
+  delete require.cache[file];
+  return require(file);
 }
 
 function runNativeServiceSupervisor({
@@ -24,9 +23,9 @@ function runNativeServiceSupervisor({
   entryPath,
   processImpl = process,
   forkWorker = fork,
-  stageUpdate = stageBridgeRelease,
-  applyUpdate = applyRelease,
-  log = (message) => fs.appendFileSync(path.join(stateDir, "logs", "bridge-update.log"), `${message}\n`, { mode: 0o600 }),
+  stageUpdate = () => installedModule("./bridge-release").stageBridgeRelease(),
+  applyUpdate = (...args) => installedModule("../scripts/update-remodex-bridge.cjs").updateBridge(...args),
+  log = (message) => fs.appendFileSync(path.join(stateDir, "logs", "bridge-update.log"), `${new Date().toISOString()} ${message}\n`, { mode: 0o600 }),
 }) {
   let child = null;
   let ready = false;
@@ -102,7 +101,7 @@ function runNativeServiceSupervisor({
       let acknowledged = false;
       try {
         if (includeRelay) {
-          const { readCoInstalledRelayService } = require("../scripts/update-remodex-bridge.cjs");
+          const { readCoInstalledRelayService } = installedModule("../scripts/update-remodex-bridge.cjs");
           if (!readCoInstalledRelayService(path.dirname(path.dirname(entryPath)))) {
             throw new Error("No active Relay from this server kit is managed by this user.");
           }
