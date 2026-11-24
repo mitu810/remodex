@@ -148,3 +148,21 @@ test("checks and renews a saved credential in a temporary home", async () => {
   assert.deepEqual(result, { usage: { rateLimits: {} }, credential: renewed });
   assert.equal(fs.existsSync(temp), false);
 });
+
+test("shared runtime matches its selected login and workspace even without a live access token", async () => {
+  const { readLiveAccountIdentity } = require("../src/account-credentials");
+  const row = { sessionId: "second", isActive: true, userId: "fixture-user", selectedWorkspaceAccountId: "workspace", email: "second@example.invalid" };
+  const response = { activeSessionId: "second", sessions: [{...row, sessionId:"first", isActive:false, email:"other@example.invalid"}, row] };
+  const auth = { authMethod: "chatgpt", authToken: null };
+  const read = (account, sessions) => readLiveAccountIdentity(account, auth, async () => sessions);
+  assert.deepEqual(await read({account:null}, response), {
+    fingerprint: credentialFingerprint(credential("workspace")), email: row.email,
+  });
+  for (const sessions of [{...response, activeSessionId:null}, {...response, activeSessionId:"first"},
+    {...response, sessions:[{...row, selectedWorkspaceAccountId:null}]}]) {
+    assert.deepEqual(await read({}, sessions), {fingerprint:null, email:null});
+  }
+  assert.deepEqual(await read({userId:"other"}, response), {fingerprint:null,email:null});
+  assert.deepEqual(await readLiveAccountIdentity({}, auth, async () => { throw Error("unsupported"); }), {fingerprint:null,email:null});
+  assert.deepEqual(await readLiveAccountIdentity({}, {authMethod:"apiKey"}, () => assert.fail("unexpected session lookup")), {fingerprint:null,email:null});
+});

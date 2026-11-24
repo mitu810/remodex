@@ -23,7 +23,7 @@ const {
 } = require("./bridge-status");
 const { createCodexTransport } = require("./codex-transport");
 const {
-  accountError, activeCredentialFingerprint, credentialFingerprint, credentialIdentity,
+  accountError, readLiveAccountIdentity, credentialFingerprint, credentialIdentity,
   createCredentialCheckRecovery, queryCredential, readInstalledCredential, replaceCodexCredential,
 } = require("./account-credentials");
 const { resolveCodexHome } = require("./codex-home");
@@ -48,7 +48,7 @@ const { handlePetRequest } = require("./pet-handler");
 const { createNotificationsHandler } = require("./notifications-handler");
 const { createVoiceHandler, resolveVoiceAuth } = require("./voice-handler");
 const {
-  bridgeHostMetadata,
+  bridgeHostMetadata, isChatGPTAuthMethod,
   composeSanitizedAuthStatusFromSettledResults,
 } = require("./account-status");
 const { createBridgePackageVersionStatusReader } = require("./package-version-status");
@@ -2207,11 +2207,14 @@ function startBridgeSession({
     });
     const account = accountReadResult.value;
     const authStatus = authStatusResult.value;
-    const fingerprint = pendingCredentialReload ? null : activeCredentialFingerprint(account, authStatus);
+    if (pendingCredentialReload) return snapshot;
+    const { fingerprint, email } = await readLiveAccountIdentity(account, authStatus,
+      () => sendCodexRequest("accountSession/list", { refreshWorkspaceMetadata: false }, { timeoutMs: 4000 }));
+    if (email) snapshot.email = email;
     if (fingerprint) {
       snapshot.managedCredentialStatus = { fingerprint, desktopRestartFailed };
-    } else if (!pendingCredentialReload && accountReadResult.status === "fulfilled"
-      && (account?.account == null || !["chatgpt", "chatgptAuthTokens"].includes(account.account.type))) {
+    } else if (accountReadResult.status === "fulfilled" && authStatusResult.status === "fulfilled"
+      && !isChatGPTAuthMethod(account?.account?.type) && !isChatGPTAuthMethod(authStatus?.authMethod)) {
       snapshot.managedCredentialStatus = { signedIn: false };
     }
     return snapshot;

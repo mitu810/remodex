@@ -84,6 +84,29 @@ function activeCredentialFingerprint(account, authStatus) {
   return typeof user === "string" && user && typeof workspace === "string" ? fingerprint(user, workspace) : null;
 }
 
+// Some shared daemons retain a selected ChatGPT session while token/routing reads
+// are incomplete. Its identity is authoritative independently of token readiness.
+async function readLiveAccountIdentity(account, authStatus, listSessions) {
+  const direct = activeCredentialFingerprint(account, authStatus);
+  const email = account?.account?.email || null;
+  const method = authStatus?.authMethod || account?.account?.type;
+  if (!isChatGPTAuthMethod(method) || (direct && email)) return { fingerprint: direct, email };
+  let sessions;
+  try { sessions = await listSessions(); } catch { return { fingerprint: direct, email }; }
+  const active = sessions?.activeSessionId && Array.isArray(sessions.sessions)
+    && sessions.sessions.find(row => row?.sessionId === sessions.activeSessionId && row.isActive === true);
+  if (typeof active?.userId !== "string" || !active.userId
+    || typeof active.selectedWorkspaceAccountId !== "string" || !active.selectedWorkspaceAccountId) {
+    return { fingerprint: direct, email };
+  }
+  const selected = fingerprint(active.userId, active.selectedWorkspaceAccountId);
+  // Reads can straddle a desktop account switch. Never combine two identities.
+  if ((account?.userId && account.userId !== active.userId)
+    || (account?.workspaceRouting?.chatgptAccountId && account.workspaceRouting.chatgptAccountId !== active.selectedWorkspaceAccountId)
+    || (direct && selected !== direct)) return { fingerprint: direct, email };
+  return { fingerprint: selected, email: email || (typeof active.email === "string" && active.email) || null };
+}
+
 function readInstalledCredential(home) {
   const file = path.join(home, "auth.json");
   try {
@@ -247,5 +270,5 @@ function runAccountCheck(transport, renew, closed) {
 module.exports = {
   accountError, activeCredentialFingerprint, credentialFingerprint, credentialIdentity,
   createCredentialCheckRecovery, queryCredential, readInstalledCredential, replaceCodexCredential,
-  validateCodexCredentialReplacement, writeInstalledCredential,
+  validateCodexCredentialReplacement, writeInstalledCredential, readLiveAccountIdentity,
 };
