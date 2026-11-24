@@ -98,10 +98,10 @@ function readInstalledCredential(home) {
   }
 }
 
-function replaceCodexCredential(home, raw) {
+function validateCodexCredentialReplacement(home, raw) {
   const incoming = parseCredential(raw);
   const previous = readInstalledCredential(home);
-  if (previous === raw) return { restartRequired: false };
+  if (previous === raw) return previous;
   if (previous != null) {
     const incomingIdentity = credentialIdentity(raw);
     let installedIdentity;
@@ -111,25 +111,37 @@ function replaceCodexCredential(home, raw) {
       throw accountError("account_newer_on_device", "This device has a newer credential. Refresh the saved account while connected to this device first.");
     }
   }
+  return previous;
+}
+
+function replaceCodexCredential(home, raw) {
+  const previous = validateCodexCredentialReplacement(home, raw);
+  if (previous === raw) return { restartRequired: false };
   fs.mkdirSync(home, { recursive: true, mode: 0o700 });
   if (previous != null) {
     const backups = path.join(home, "remodex-auth-backups");
     ensurePrivateDirectory(backups);
     writePrivateFile(path.join(backups, `${randomUUID()}.json`), previous);
   }
+  writeInstalledCredential(home, previous, raw);
+  return { restartRequired: true };
+}
+
+// Used for both installation and recovery. Never overwrite a concurrent login.
+function writeInstalledCredential(home, previous, raw) {
   const staging = fs.mkdtempSync(path.join(home, ".remodex-auth-"));
   try {
     ensurePrivateDirectory(staging);
     const stagedFile = path.join(staging, "auth.json");
-    writePrivateFile(stagedFile, raw);
+    if (raw !== null) writePrivateFile(stagedFile, raw);
     if (readInstalledCredential(home) !== previous) {
       throw accountError("account_file_changed", "Codex updated the host credential during the operation. Try again.");
     }
-    fs.renameSync(stagedFile, path.join(home, "auth.json"));
+    if (raw === null) fs.unlinkSync(path.join(home, "auth.json"));
+    else fs.renameSync(stagedFile, path.join(home, "auth.json"));
   } finally {
     fs.rmSync(staging, { recursive: true, force: true });
   }
-  return { restartRequired: true };
 }
 
 // Reuses the bridge's platform-aware Codex launcher, including Windows npm shims.
@@ -235,4 +247,5 @@ function runAccountCheck(transport, renew, closed) {
 module.exports = {
   accountError, activeCredentialFingerprint, credentialFingerprint, credentialIdentity,
   createCredentialCheckRecovery, queryCredential, readInstalledCredential, replaceCodexCredential,
+  validateCodexCredentialReplacement, writeInstalledCredential,
 };

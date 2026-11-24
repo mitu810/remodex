@@ -27,6 +27,7 @@ const {
   createCredentialCheckRecovery, queryCredential, readInstalledCredential, replaceCodexCredential,
 } = require("./account-credentials");
 const { resolveCodexHome } = require("./codex-home");
+const { isLocalSharedCodex, prepareSharedAccountSwitch, requireIdleThreads } = require("./shared-codex-account");
 const { createOpenCodeRuntime } = require("./opencode-runtime");
 const { createRelayWatchdog } = require("./relay-watchdog");
 const {
@@ -728,15 +729,21 @@ function createBridgeSessionSupervisor(startSession, { restartDelayMs = 500 } = 
   let restarting;
   let stopped = false;
 
-  function scheduleRestart(afterStop) {
+  function scheduleRestart(afterStop, beforeStop) {
     if (restarting) return restarting;
     const previous = session;
     restarting = (async () => {
       // Allow the encrypted apply response to reach the phone first.
       await new Promise((resolve) => setTimeout(resolve, restartDelayMs));
       if (stopped) return;
+      // A desktop client can start work during the encrypted reply's delivery window.
+      let runtimeReady = true;
+      if (beforeStop) {
+        try { await beforeStop(); } catch { runtimeReady = false; }
+      }
+      if (stopped) return;
       await previous.stop();
-      const desktopRestartFailed = !stopped && await afterStop?.();
+      const desktopRestartFailed = !runtimeReady || (!stopped && await afterStop?.());
       if (!stopped) {
         session = startSession({ relaySessionId: previous.relaySessionId, scheduleRestart, desktopRestartFailed });
       }
@@ -877,6 +884,7 @@ function startBridgeSession({
   const openCodeThreadCatalog = new Map();
   const archivedOpenCodeThreadCatalog = new Map();
   let openCodeCatalogRefresh = null;
+  let endpointServer = null;
   let credentialOperation = null;
   let credentialCheckRecovery = createCredentialCheckRecovery();
   let pendingCredentialReload = false;
@@ -1105,7 +1113,7 @@ function startBridgeSession({
     if (isShuttingDown) return;
     if (initializeEndpoint) {
       try {
-        await sendCodexRequest("initialize", {
+        endpointServer = await sendCodexRequest("initialize", {
           clientInfo: { name: "remodex", version: bridgePackageVersion },
           capabilities: { experimentalApi: true },
         });
@@ -2006,7 +2014,7 @@ function startBridgeSession({
         && Buffer.byteLength(submittedCredential) <= 128 * 1024
         ? recovery.read(submittedCredential) : null;
       if (cached) return cached;
-      return handleCredentialOperation(parsed.params, isApply).then((result) => {
+      return handleCredentialOperation(parsed.params, isApply, autoRestart).then((result) => {
         recovery?.remember(submittedCredential, result);
         return result;
       });
@@ -2020,6 +2028,10 @@ function startBridgeSession({
           if (restartScheduled) {
             scheduleRestart(async () => {
               try {
+                if (result.restartSharedDaemon) {
+                  await result.restartSharedDaemon();
+                  return false;
+                }
                 await restartRunningCodexDesktop({
                   codexHome: resolveCodexHome(),
                   appPath: config.codexAppPath,
@@ -2027,10 +2039,10 @@ function startBridgeSession({
                 });
                 return false;
               } catch {
-                console.warn("[remodex] The desktop client did not restart after the credential update.");
+                console.warn("[remodex] The Codex runtime did not complete the account switch.");
                 return true;
               }
-            }).catch((error) => {
+            }, result.restartSharedDaemon ? () => requireIdleThreads(sendCodexRequest) : undefined).catch((error) => {
               console.error(`[remodex] Credential restart failed: ${error.message}`);
               process.exit(1);
             });
@@ -2042,23 +2054,36 @@ function startBridgeSession({
     return true;
   }
 
-  async function handleCredentialOperation(params, isApply) {
+  async function handleCredentialOperation(params, isApply, autoRestart) {
     const identity = credentialIdentity(params.credential);
     if (!identity) throw accountError("invalid_account_credential", "Select a Codex ChatGPT auth.json file.");
     const home = resolveCodexHome();
+    const shared = { home, endpoint: config.codexEndpoint, server: endpointServer };
+    const localDaemon = codex.mode !== "spawn" && isLocalSharedCodex(shared);
     if (isApply) {
-      if (codex.mode !== "spawn") {
+      if (codex.mode !== "spawn" && !(localDaemon && autoRestart)) {
         throw accountError("account_external_runtime", "Credential replacement requires a Codex process managed by this bridge.");
       }
       const configSnapshot = await sendCodexRequest("config/read", { includeLayers: false });
       const storageMode = configSnapshot?.config?.cli_auth_credentials_store
         ?? configSnapshot?.config?.cliAuthCredentialsStore;
-      if (storageMode && storageMode !== "file") {
+      if ((localDaemon || storageMode) && storageMode !== "file") {
         throw accountError("account_file_storage_required", "Set Codex credential storage to file on this device before replacing its credential.");
       }
       if (pendingAuthLogin.requestId || pendingAuthLogin.loginId
         || activityStore.snapshot().entries.some((entry) => entry.runtime === "active")) {
         throw accountError("account_runtime_busy", "Finish active Codex runs and sign-ins before applying a credential.");
+      }
+      if (localDaemon) {
+        if (readInstalledCredential(home) === params.credential
+          && await readActiveCredentialFingerprint() === credentialFingerprint(params.credential)) {
+          return { restartRequired: false };
+        }
+        const restartSharedDaemon = await prepareSharedAccountSwitch({
+          ...shared, credential: params.credential, appPath: config.codexAppPath, rpc: sendCodexRequest,
+        });
+        pendingCredentialReload = true;
+        return { restartRequired: true, restartSharedDaemon };
       }
       const result = replaceCodexCredential(home, params.credential);
       if (result.restartRequired) pendingCredentialReload = true;
@@ -2075,7 +2100,7 @@ function startBridgeSession({
     if (installed) {
       try { matchesInstalled = credentialIdentity(installed) === identity; } catch {}
     }
-    if (!matchesInstalled || codex.mode !== "spawn") {
+    if (!matchesInstalled || (codex.mode !== "spawn" && !localDaemon)) {
       return queryCredential(params.credential, { renew: params.renew === true, appPath: config.codexAppPath });
     }
     if (pendingCredentialReload) {

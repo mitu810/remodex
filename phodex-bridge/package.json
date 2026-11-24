@@ -1,6 +1,6 @@
 {
   "name": "remodex",
-  "version": "4.0.15",
+  "version": "4.0.16",
   "releaseRepository": "mitu810/remodex",
   "description": "Local bridge between Codex and the Remodex mobile app. Run `remodex up` to start.",
   "repository": {
