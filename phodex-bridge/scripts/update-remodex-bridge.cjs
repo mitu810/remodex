@@ -54,10 +54,12 @@ function readLinuxService(run, unit = LINUX_SERVICE) {
   const [nodePath, entryPath] = args.slice(1).map((value) => (value.startsWith('"') ? JSON.parse(value) : value).replaceAll("%%", "%"));
   return {
     nodePath, entryPath,
-    stop: () => systemctl("stop", unit),
+    // Queue the job and observe ActiveState below. A synchronous systemctl can
+    // time out after systemd has accepted the stop and will still carry it out.
+    stop: () => systemctl("stop", "--no-block", unit),
     start: () => {
       systemctl("reset-failed", unit);
-      systemctl("start", unit);
+      systemctl("start", "--no-block", unit);
     },
     state: () => systemctl("show", unit, "--property=ActiveState", "--value"),
   };
@@ -274,9 +276,10 @@ async function replaceBridge(service, archive, bridge, {
     const stopOrder = [...components].reverse();
     try {
       for (const component of stopOrder) {
+        component.stopRequested = true;
         await component.service.stop();
-        component.stopped = true;
         await waitForService(component.service, "inactive", pause);
+        component.stopped = true;
       }
       for (const component of components) {
         if (component.kind === "relay") preserveRelayLocalFiles(component.root, component.staging);
@@ -291,23 +294,47 @@ async function replaceBridge(service, archive, bridge, {
         await waitForService(component.service, "active", pause);
       }
     } catch (error) {
-      try {
-        for (const component of stopOrder) {
-          if (!component.started) continue;
-          await component.service.stop();
-          await waitForService(component.service, "inactive", pause);
-        }
-        for (const component of components) {
-          if (component.swapped) fs.renameSync(component.root, path.join(workspace, `failed-${component.kind}`));
-          if (fs.existsSync(component.backup)) fs.renameSync(component.backup, component.root);
-          if (component.stopped && component.wasRunning) {
-            await component.service.start();
-            await waitForService(component.service, "active", pause);
+      const recoveryErrors = [];
+      for (const component of stopOrder) {
+        if (!component.started && (!component.stopRequested || component.stopped)) continue;
+        try {
+          // The manager can accept a stop before the command reports an error.
+          // Settle even that in-flight job before restoring or starting services.
+          const current = component.service.state();
+          if (current === "inactive" || current === "failed") continue;
+          if (current !== "deactivating") {
+            await component.service.stop();
           }
+          await waitForService(component.service, "inactive", pause);
+        } catch (stopError) {
+          component.recoveryBlocked = true;
+          recoveryErrors.push(`Stop ${component.kind}: ${stopError.message}`);
         }
-      } catch (rollbackError) {
+      }
+      // Restore all install directories before attempting to bring either
+      // service online. A broken Relay must not strand Bridge in the backup.
+      for (const component of components) {
+        if (component.recoveryBlocked || !fs.existsSync(component.backup)) continue;
+        try {
+          if (component.swapped) fs.renameSync(component.root, path.join(workspace, `failed-${component.kind}`));
+          fs.renameSync(component.backup, component.root);
+        } catch (restoreError) {
+          component.recoveryBlocked = true;
+          recoveryErrors.push(`Restore ${component.kind}: ${restoreError.message}`);
+        }
+      }
+      for (const component of components) {
+        if (component.recoveryBlocked || !component.stopRequested || !component.wasRunning) continue;
+        try {
+          await component.service.start();
+          await waitForService(component.service, "active", pause);
+        } catch (startError) {
+          recoveryErrors.push(`Start ${component.kind}: ${startError.message}`);
+        }
+      }
+      if (recoveryErrors.length) {
         keepWorkspace = true;
-        throw new Error(`${error.message}\nAutomatic recovery failed: ${rollbackError.message}\nBackup: ${workspace}`);
+        throw new Error(`${error.message}\nAutomatic recovery failed: ${recoveryErrors.join("\n")}\nBackup: ${workspace}`);
       }
       keepWorkspace = false;
       throw new Error(`${error.message}\nThe previous installation was preserved or restored.`);

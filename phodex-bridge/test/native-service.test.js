@@ -418,18 +418,20 @@ test('combined updates only target the active Relay registered in the same serve
       assert.equal(file, 'systemctl');
       assert.equal(args[0], '--user');
       assert.equal(args[2], 'remodex-relay.service');
-      return args[1] === 'cat' ? `ExecStart="${process.execPath}" "${entry}"` : state;
+      return args[1] === 'cat' ? `ExecStart=${JSON.stringify(process.execPath)} ${JSON.stringify(entry)}` : state;
     },
   });
   assert.equal(read(path.join(relay, 'server.js'), 'active')?.version, '4.0.8');
   assert.equal(read(path.join(relay, 'server.js'), 'inactive'), null);
   assert.equal(read(path.join(bridge, 'server.js'), 'active'), null);
 
+  // The launchd adapter uses the local Unix uid for the launchctl domain.
+  if (process.platform === 'win32') return;
   const macRelay = readCoInstalledRelayService(bridge, {
     platform: 'darwin',
     run(file, args) {
       if (file === '/usr/bin/plutil') {
-        const legacy = args.at(-1).endsWith('/com.remodex.loopback-relay.plist');
+        const legacy = path.basename(args.at(-1)) === 'com.remodex.loopback-relay.plist';
         return JSON.stringify({ ProgramArguments: [process.execPath, path.join(legacy ? relay : bridge, 'server.js')] });
       }
       assert.equal(file, '/bin/launchctl');
@@ -440,8 +442,87 @@ test('combined updates only target the active Relay registered in the same serve
   assert.equal(macRelay?.version, '4.0.8');
 });
 
-for (const failComponent of [null, 'relay', 'bridge']) {
-  test(`combined release ${failComponent ? `rolls both components back when ${failComponent} fails` : 'updates both components in dependency order'}`, async (t) => {
+test('Linux updater queues systemd jobs without waiting on the discovery command timeout', () => {
+  const { readLinuxService } = require('../scripts/update-remodex-bridge.cjs');
+  const calls = [];
+  const service = readLinuxService((file, args) => {
+    assert.equal(file, 'systemctl');
+    calls.push(args);
+    return 'ExecStart="/usr/bin/node" "/home/user/remodex-server-kit/relay/server.js"';
+  }, 'remodex-relay.service');
+  service.stop();
+  service.start();
+  assert.deepEqual(calls.slice(1), [
+    ['--user', 'stop', '--no-block', 'remodex-relay.service'],
+    ['--user', 'reset-failed', 'remodex-relay.service'],
+    ['--user', 'start', '--no-block', 'remodex-relay.service'],
+  ]);
+});
+
+test('Linux updater restarts a real user unit with a slow stop', { skip: process.platform !== 'linux', timeout: 30_000 }, async (t) => {
+  const { readLinuxService } = require('../scripts/update-remodex-bridge.cjs');
+  const { buildSystemdUnit } = require('../src/linux-service');
+  const systemctl = (args, timeout = 10_000) => execFileSync('systemctl', ['--user', ...args], {
+    encoding: 'utf8', timeout, stdio: ['ignore', 'pipe', 'pipe'],
+  }).trim();
+  try {
+    systemctl(['show-environment']);
+  } catch (error) {
+    if (error.code === 'ENOENT' || /(?:failed to connect|no medium found)/i.test(error.stderr || '')) {
+      t.skip('systemd user manager is unavailable');
+      return;
+    }
+    throw error;
+  }
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'remodex-systemd-update-'));
+  const unit = `remodex-update-test-${require('node:crypto').randomUUID()}.service`;
+  const unitFile = path.join(dir, unit);
+  const entry = path.join(dir, 'slow-relay.cjs');
+  const readyFile = path.join(dir, 'ready');
+  fs.writeFileSync(entry, `
+    const fs = require('node:fs');
+    process.on('SIGTERM', () => setTimeout(() => process.exit(0), 3200));
+    fs.writeFileSync(require('node:path').join(process.argv[2], 'ready'), String(process.pid));
+    setInterval(() => {}, 1000);
+  `);
+  fs.writeFileSync(path.join(dir, 'daemon-config.json'), '{}');
+  fs.writeFileSync(unitFile, buildSystemdUnit({ nodePath: process.execPath, entryPath: entry, stateDir: dir }));
+  async function waitFor(check) {
+    const end = Date.now() + 8000;
+    while (!check()) {
+      assert.ok(Date.now() < end, 'timed out waiting for the test unit');
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  }
+  let linked = false;
+  try {
+    systemctl(['link', '--runtime', unitFile]);
+    linked = true;
+    systemctl(['daemon-reload']);
+    systemctl(['start', unit]);
+    await waitFor(() => fs.existsSync(readyFile));
+    const oldPid = fs.readFileSync(readyFile, 'utf8');
+    const service = readLinuxService((file, args) => {
+      assert.equal(file, 'systemctl');
+      return systemctl(args.slice(1), 2500); // Same budget as Relay capability discovery.
+    }, unit);
+    service.stop();
+    await waitFor(() => service.state() === 'inactive');
+    service.start();
+    await waitFor(() => fs.readFileSync(readyFile, 'utf8') !== oldPid && service.state() === 'active');
+  } finally {
+    try {
+      if (linked) {
+        try { systemctl(['stop', unit]); } finally { systemctl(['disable', '--runtime', unit]); }
+      }
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }
+});
+
+for (const failure of [null, 'relay', 'bridge', 'lost relay stop reply', 'relay recovery']) {
+  test(`combined release ${failure ? `recovers after ${failure} failure` : 'updates both components in dependency order'}`, async (t) => {
     const { updateBridge } = require('../scripts/update-remodex-bridge.cjs');
     const { root } = fixture(t);
     const archive = path.join(root, 'verified.zip');
@@ -471,11 +552,19 @@ for (const failComponent of [null, 'relay', 'bridge']) {
         root: directory,
         nodePath: process.execPath,
         state: () => status,
-        stop() { events.push(`stop ${component}`); status = 'inactive'; },
+        stop() {
+          events.push(`stop ${component}`);
+          status = 'inactive';
+          if (failure === 'lost relay stop reply' && component === 'relay') {
+            throw new Error('systemctl timed out after the unit stopped');
+          }
+        },
         start() {
           const { version } = JSON.parse(fs.readFileSync(path.join(directory, 'package.json'), 'utf8'));
           events.push(`start ${component} ${version}`);
-          status = failComponent === component && version === '4.0.9' ? 'failed' : 'active';
+          const newVersionFailed = failure === component && version === '4.0.9';
+          const relayStaysDown = failure === 'relay recovery' && component === 'relay';
+          status = (newVersionFailed || relayStaysDown) ? 'failed' : 'active';
         },
       };
     }
@@ -492,15 +581,16 @@ for (const failComponent of [null, 'relay', 'bridge']) {
         writeComponent(stage, 'relay', '4.0.9');
       },
     });
-    if (failComponent) {
-      await assert.rejects(result, /previous installation was preserved or restored/);
+    if (failure) {
+      const expectedError = failure === 'relay recovery' ? /Automatic recovery failed: Start relay/ : /previous installation was preserved or restored/;
+      await assert.rejects(result, expectedError);
       assert.deepEqual(events.slice(-2), ['start relay 4.0.8', 'start bridge 4.0.8']);
     } else {
       await result;
       assert.deepEqual(events, ['stop bridge', 'stop relay', 'start relay 4.0.9', 'start bridge 4.0.9']);
     }
     for (const dir of [bridgeRoot, relayRoot]) {
-      assert.equal(JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8')).version, failComponent ? '4.0.8' : '4.0.9');
+      assert.equal(JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8')).version, failure ? '4.0.8' : '4.0.9');
     }
     assert.equal(fs.readFileSync(path.join(relayRoot, '.env'), 'utf8'), 'PORT=9000');
   });
